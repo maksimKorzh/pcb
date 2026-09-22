@@ -1,4 +1,5 @@
 from playok import PlayOK
+import json
 
 if __name__ == "__main__":
     #websocket.enableTrace(True)
@@ -7,10 +8,35 @@ if __name__ == "__main__":
     socket.connect()
 
     while socket.running:
-        message = input("> ")
+        message = input()
 
         if message.lower() == "quit":
             socket.close()
-            break
+            continue
+        
+        elif "join" in message:
+            socket.message('join', int(message.split()[-1]))
+            continue
+        
+        elif message == "white" or message == "black" or message == "start" or message == "resign":
+            socket.message(message, socket.active_table)
+            continue
+        
+        elif "leave" in message:
+            socket.message('leave', socket.active_table)
+            continue
+        
+        elif message == "info":
+            print("running/joined/table", socket.running, socket.joined_table, socket.active_table, socket.engine_side)
+            continue
+        
+        elif message == "move":
+            socket.send_move()
+            continue
+        
+        elif message == "board":
+            print(socket.engine.board)
+            continue
 
-        socket.send_message(message)
+        try: socket.send_message(json.loads(message))
+        except: print("Bad JSON")
