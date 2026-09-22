@@ -15,19 +15,22 @@ if __name__ == "__main__":
             continue
         
         elif "join" in message:
-            socket.message('join', int(message.split()[-1]))
+            socket.command('join', int(message.split()[-1]))
             continue
         
         elif message == "white" or message == "black" or message == "start" or message == "resign":
-            socket.message(message, socket.active_table)
+            socket.command(message, socket.active_table)
             continue
         
         elif "leave" in message:
-            socket.message('leave', socket.active_table)
+            socket.command('leave', socket.active_table)
             continue
         
         elif message == "info":
-            print("running/joined/table", socket.running, socket.joined_table, socket.active_table, socket.engine_side)
+            print("running:", socket.running)
+            print("active table:", socket.active_table)
+            print("active game:", socket.active_game)
+            print("engine side:", socket.engine_side)
             continue
         
         elif message == "move":

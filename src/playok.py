@@ -18,10 +18,7 @@ class PlayOK:
         
         # PlayOK state
         self.table_range = 0
-        self.active_game = 0
-        self.joined_table = 0
         self.active_table = 0
-        #self.side_to_move = 0
         self.engine_side = -1
         
         # Chess engine
@@ -82,10 +79,7 @@ class PlayOK:
                 message = self.ws.recv()
                 if not message: continue
                 #print(" ->:", end=" ")
-                #print(message)
-                #print(message[:75] + "..." if len(message) > 75 else message, self.joined_table, self.active_table)
-                
-                #print(self.joined_table, self.active_table, self.engine_side)
+                #print(message[:75] + "..." if len(message) > 75 else message)
 
                 response = json.loads(message)
                 
@@ -103,17 +97,10 @@ class PlayOK:
                         last_table = str(int(first_table) + 99)
                         self.table_range = "#" + first_table + " - " + "#" + last_table
                         print(f"PLAYOK: Table range {self.table_range}")
-                    if self.joined_table == 1: continue
-                    #if response["i"][3] == 1 and response["i"][4] == 0: self.accept_challenge('white', table)
-                    #if response["i"][3] == 0 and response["i"][4] == 1: self.accept_challenge('black', table)
-                    
-                    #if response["i"][3] == 1 and response["i"][4] == 1: self.accept_challenge('black', table)
-                    
-                    # {"i": [72, 152], "s": []}
-                    
+                    if not self.active_table: print(f"You can join table #{table}");
                     
                 # Load ongoing game
-                elif response["i"][0] == LOAD_GAME and response["i"][1] == self.active_table and self.joined_table:
+                elif response["i"][0] == LOAD_GAME and response["i"][1] == self.active_table:
                     self.engine.new_game()
                     try:
                         moves = response["s"]
@@ -123,13 +110,14 @@ class PlayOK:
                     except: pass
 
                 # Load last move
-                elif response["i"][0] == LOAD_MOVE and response["i"][1] == self.active_table and self.joined_table:
+                elif response["i"][0] == LOAD_MOVE and response["i"][1] == self.active_table:
                     try:
-                        print("move", response)
+                        #print("move", response)
                         side = 1 if self.engine.board.turn else 0
                         move = response["s"][0]
                         self.engine.load_move(move)
-                        print(self.engine.board)
+                        print("\n", self.engine.board, sep="")
+                        print("Side to move:", "white" if self.engine.board.turn else "black")
                         if side == self.engine_side ^ 1: self.send_move()
                     except: pass
 
@@ -141,13 +129,8 @@ class PlayOK:
                          "booted" in response["s"][0] or   \
                          "offline" in response["s"][0] or  \
                          "displaced" in response["s"][0]:
-                          self.message('leave', response["i"][1])
+                          self.command('leave', response["i"][1])
 
-                # Check if the game is still played
-                if response["i"][0] == GAME_STATE:
-                    if response["i"][3] == -1: self.active_game = 0
-                    else: self.active_game = 1
-                    
             except Exception as e:
                 print("SYSTEM:", e)
                 self.running = False
@@ -156,26 +139,22 @@ class PlayOK:
     def send_move(self):
         move = self.engine.search()
         self.send_message({"i": [LOAD_MOVE, self.active_table, 1, move, 1]})
-        print("best move", {"i": [LOAD_MOVE, self.active_table, 1, move, 1]})
 
     def accept_challenge(self, color, table):
-        self.message('join', table)
-        self.message(color, table)
-        self.message('start', table)
+        self.command('join', table)
+        self.command(color, table)
+        self.command('start', table)
 
-    def message(self, action, table):
+    def command(self, action, table):
         request = {"i": [], "s": []}
         if action == "join":
             request["i"] = [JOIN_TABLE, table]
-            self.joined_table = 1
             self.active_table = table
             self.engine_side = -1
             print(f"PLAYOK: Joined table #{table}")
         elif action == "leave":
             print(f"PLAYOK: Leaving table #{table}")
             request["i"] = [LEAVE_TABLE, table]
-            self.active_game = 0
-            self.joined_table = 0
             self.active_table = 0
             self.engine_side = -1
         elif action == "white":
@@ -187,16 +166,9 @@ class PlayOK:
             self.engine_side = 0
             print(f"PLAYOK: Took black pieces at table #{table}")
         elif action == "start":
-            self.active_game = 0
             request["i"] = [START_GAME, table]
             print(f"PLAYOK: Attempting to start a game at table #{table}")
             self.send_message(request)
-            time.sleep(5)
-            if not self.active_game:
-                print(f"PLAYOK: Opponent refused to start game at table #{table}")
-                self.message('leave', table)
-            elif self.active_game:
-                if self.engine_side == 1: self.send_move()
         elif action == "resign":
           request["i"] = [RESIGN_GAME, table, 4, 0]
         
