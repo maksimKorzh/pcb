@@ -38,6 +38,7 @@ if __name__ == "__main__":
             print("player black:", socket.player_black)
             print("active game:", socket.active_game)
             print("engine side:", socket.engine_side)
+            print("first move:", socket.first_move)
             continue
         
         elif message == "user":

@@ -24,6 +24,7 @@ class PlayOK:
         self.player_white = ""
         self.player_black = ""
         self.engine_side = NONE
+        self.first_move = NONE
         
         # Chess engine
         self.engine = ChessEngine()
@@ -35,6 +36,7 @@ class PlayOK:
         self.player_white = ""
         self.player_black = ""
         self.engine_side = NONE
+        self.first_move = NONE
 
     # Connect to PlayOK WebSocket
     def connect(self):
@@ -137,21 +139,24 @@ class PlayOK:
                         if response["i"][1] in range(self.table_range[0], self.table_range[1]):
                             # Init table
                             table = response["i"][1]
-                            
+
                             # Lobby actions
                             if not self.active_table:
                                 if response["i"][0] == ACTIVE_CHALLENGES:
                                     print(f"LOBBY: Game ({response["s"][1]}) vs ({response["s"][2]}) at #{table}")
                                     
                                     # Join empty table
-                                    if self.player_white == "" and self.player_black == "":
+                                    if response["i"][3] == 0 and response["i"][4] == 0:
                                         self.send_command("join", table)
+                                        #self.send_command("white_on", table)
+                                        self.send_command("black_on", table) # works
                                         continue
                             
                             # Table actions
                             elif table == self.active_table:
                                 # Taking sits over the board
                                 if response["i"][0] == ACTIVE_CHALLENGES:
+                                    
                                     # Init players
                                     self.player_white = response["s"][1]
                                     self.player_black = response["s"][2]
@@ -159,11 +164,6 @@ class PlayOK:
                                     # Init engine side
                                     if self.player_white == self.user_name: self.engine_side = WHITE
                                     elif self.player_black == self.user_name: self.engine_side = BLACK
-                                    
-                                    # Take side
-                                    if self.player_white == "" and self.player_black == "":
-                                        self.send_command("black_on", table)
-                                        continue
 
                                 # Tracking game status
                                 elif response["i"][0] == GAME_STATE: self.active_game = response["i"][3]
@@ -174,7 +174,7 @@ class PlayOK:
                                     try:
                                         moves = response["s"]
                                         for move in moves: self.engine.load_move(move)
-                                        print(self.engine.board)
+                                        #print(self.engine.board)
                                         print(f"TABLE #{table}: Loaded game")
                                     except: pass
                                 
@@ -186,29 +186,51 @@ class PlayOK:
                                         move = response["s"][0]
                                         print(f"TABLE #{table}: {("white" if side else "black")} played {move}")
                                         self.engine.load_move(move)
-                                        print("\n", self.engine.board, sep="")
-                                        print("Side to move:", "white" if self.engine.board.turn else "black")
+                                        #print("\n", self.engine.board, sep="")
+                                        #print("Side to move:", "white" if self.engine.board.turn else "black")
                                         #print("engine side:", self.engine_side)
                                         if side == self.engine_side ^ 1: self.send_move()
                                     except: pass
 
                                 # User has been displaced
                                 if response["i"][0] == GAME_CHAT:
-                                    if response["s"][0] == "+ you have been displaced by the table operator":
-                                        print(f"TABLE #{table}: {self.user_name} has been displaced by the table operator")
+                                    if response["s"][0] == "+ you have been displaced by the table operator" or \
+                                       "win" in response["s"][0] or \
+                                       "draw" in response["s"][0]:
                                         self.send_command("leave", table)
                                         continue
 
                                 # Init game status
-                                status = "idling" if self.active_game == NONE else "playing"
+                                status = "idle" if self.active_game == NONE else "play"
 
                                 # Print table status
-                                print(f"TABLE #{table}: ({self.player_white}) vs ({self.player_black}) {status}")
+                                if self.first_move == NONE:
+                                    print(f"TABLE #{table}: ({self.player_white}) vs ({self.player_black}) {status}")
                                 
                                 # Request to start the game
-                                if status == "idling":
+                                if status == "idle":
                                     if self.engine_side != NONE and self.player_white != "" and self.player_black != "":
                                         self.send_command("start", table)
+                                    if self.first_move != NONE:
+                                        self.send_command("leave", table)
+
+                                elif status == "play" and self.player_white != self.user_name and self.player_black != self.user_name:
+                                    self.send_command("leave", table)
+                                
+                                elif status == "play" and self.engine_side == WHITE and self.first_move == NONE:
+                                    print("First move")
+                                    self.send_move();
+                                    self.first_move = WHITE
+                                
+                                elif status == "play" and self.engine_side == BLACK and self.first_move == NONE:
+                                    self.first_move = WHITE
+                                
+                                
+                                # TODO:
+                                # 1. Should leave on game end WORKS
+                                # 2. Should make first move if plays white WORKS
+                                # 3. Queening move issue
+                                # {"i":[92,887,1,7729,184]}  b2a1q
 
                     except Exception as e: pass#print(e)
 
