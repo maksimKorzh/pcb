@@ -1,4 +1,5 @@
 # PlayOK connection
+DELAY = 5
 WS_URL = "wss://x.playok.com:17003/ws/"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36"
 KEEP_ALIVE = {"i": []}
@@ -30,7 +31,7 @@ RESIGN_GAME = 93
 
 # UCI chess engine
 ENGINE_PATH = "../engine/abc.exe"
-SEARCH_TIME = 2.0
+SEARCH_TIME = 3
 WHITE = 1
 BLACK = 0
 NONE = -1

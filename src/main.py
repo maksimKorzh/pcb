@@ -1,5 +1,6 @@
 from playok import PlayOK
 import json
+from config import *
 
 if __name__ == "__main__":
     socket = PlayOK()
@@ -11,20 +12,8 @@ if __name__ == "__main__":
         if message.lower() == "quit":
             socket.close()
             continue
-        
-        #elif "join" in message:
-        #    socket.send_command('join', int(message.split()[-1]))
-        #    continue
-        
-        #elif message in [
-        #    "white_on", "white_off",
-        #    "black_on", "black_off",
-        #    "leave", "start", "resign"
-        #]:
-        #    socket.send_command(message, socket.active_table)
-        #    continue
 
-        elif message == "resign":
+        elif message in ["resign", "leave"]:
             socket.send_command(message, socket.active_table)
             continue
 
@@ -37,14 +26,6 @@ if __name__ == "__main__":
             print("engine side:", "None" if socket.engine_side == NONE else "White" if socket.engine_side == WHITE else "Black")
             print("first move:", "No" if socket.first_move == NONE else "Played")
             continue
-        
-        #elif message == "user":
-        #    socket.user_status()
-        #    continue
-
-        #elif message == "move":
-        #    socket.send_move()
-        #    continue
         
         elif message == "board":
             print(socket.engine.board)

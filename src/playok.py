@@ -72,7 +72,7 @@ class PlayOK:
     # Stay online
     def keep_alive(self):
         while self.running:
-            time.sleep(5)
+            time.sleep(DELAY)
             if not self.running: break
             self.send_message(KEEP_ALIVE)
             
@@ -201,15 +201,17 @@ class PlayOK:
                                 if status == "idle":
                                     if self.first_move != NONE:
                                         self.send_command("leave", table)
-                                        time.sleep(10)
+                                        time.sleep(DELAY)
                                     if self.engine_side != NONE:
                                         if self.player_white != "" and self.player_black != "":
                                             self.send_command("start", table)
+                                            time.sleep(DELAY)
                                         elif self.player_white == "" and self.player_black == "":
                                             self.send_command("leave", table)
 
                                 elif status == "play" and self.player_white != self.user_name and self.player_black != self.user_name:
                                     self.send_command("leave", table)
+                                    time.sleep(DELAY)
                                 
                                 elif status == "play" and self.engine_side == WHITE and self.first_move == NONE:
                                     self.send_move();
