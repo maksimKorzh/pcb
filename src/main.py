@@ -15,15 +15,20 @@ if __name__ == "__main__":
             continue
         
         elif "join" in message:
-            socket.command('join', int(message.split()[-1]))
+            socket.send_command('join', int(message.split()[-1]))
             continue
         
-        elif message == "white" or message == "black" or message == "start" or message == "resign":
-            socket.command(message, socket.active_table)
+        #elif message == "white" or message == "black" or message == "start" or message == "resign":
+        elif message in [
+            "white_on", "white_off",
+            "black_on", "black_off",
+            "start", "resign"
+        ]:
+            socket.send_command(message, socket.active_table)
             continue
         
         elif "leave" in message:
-            socket.command('leave', socket.active_table)
+            socket.send_command('leave', socket.active_table)
             continue
         
         elif message == "info":

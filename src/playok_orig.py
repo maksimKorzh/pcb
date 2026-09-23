@@ -19,11 +19,11 @@ class PlayOK:
         # PlayOK state
         self.table_range = (0, 0)
         self.active_table = 0
-        self.active_game = NONE
+        self.active_game = -1
         self.user_name = ""
         self.player_white = ""
         self.player_black = ""
-        self.engine_side = NONE
+        self.engine_side = -1
         
         # Chess engine
         self.engine = ChessEngine()
@@ -31,10 +31,14 @@ class PlayOK:
     # Reset PlayOK state
     def reset_state(self):
         self.active_table = 0
-        self.active_game = NONE
+        self.active_game = -1
         self.player_white = ""
         self.player_black = ""
-        self.engine_side = NONE
+        self.engine_side = -1
+
+    # Get user status
+    def user_status(self):
+        self.send_message({"i": [USER_INFO], "s": [self.user_name]})
 
     # Connect to PlayOK WebSocket
     def connect(self):
@@ -62,10 +66,6 @@ class PlayOK:
                 print("SYSTEM: Chess engine closed")
             except Exception: pass
 
-    # Get user status
-    def user_status(self):
-        self.send_message({"i": [USER_INFO], "s": [self.user_name]})
-
     # Stay online
     def keep_alive(self):
         while self.running:
@@ -75,7 +75,6 @@ class PlayOK:
             
             # Check user status
             self.user_status()
-            
 
     # Send message to PlayOK WebSocket
     def send_message(self, message):
@@ -116,7 +115,7 @@ class PlayOK:
                     table = response["i"][1]
                     if self.table_range == (0, 0):
                         first_table = [c for c in str(table)]
-                        first_table[NONE] = "0"
+                        first_table[-1] = "0"
                         first_table[-2] = "0"
                         first_table = int("".join(first_table))
                         last_table = first_table + 99
@@ -124,12 +123,12 @@ class PlayOK:
                         print(f"PLAYOK: Table range {self.table_range}")
 
                 if response["i"][0] == USER_INFO:
-                    #print(f"INFO: {self.user_name} is at table {response["i"][2]}")
+                    print(f"INFO: {self.user_name} is at table {response["i"][2]}")
                     if response["i"][2] == 0: self.reset_state()
-                    else: self.active_table = response["i"][2]
                     
                 
                 #if self.user_name in message: print(message)
+
                 # Entered the room
                 if self.table_range[0]:
                     try:
@@ -142,28 +141,26 @@ class PlayOK:
                             if not self.active_table:
                                 if response["i"][0] == ACTIVE_CHALLENGES:
                                     print(f"LOBBY: Game ({response["s"][1]}) vs ({response["s"][2]}) at #{table}")
-                                    
-                                    # Join empty table
-                                    if self.player_white == "" and self.player_black == "":
-                                        self.send_command("join", table)
-                                        continue
                             
                             # Table actions
                             elif table == self.active_table:
                                 # Taking sits over the board
                                 if response["i"][0] == ACTIVE_CHALLENGES:
-                                    # Init players
                                     self.player_white = response["s"][1]
                                     self.player_black = response["s"][2]
                                     
-                                    # Init engine side
-                                    if self.player_white == self.user_name: self.engine_side = WHITE
-                                    elif self.player_black == self.user_name: self.engine_side = BLACK
+                                    #if response["i"][3] == 1:
+                                    #    self.player_white = response["s"][1]
+                                    #    if response["i"][4] == 0: self.command("black", table)
                                     
-                                    # Take side
-                                    if self.player_white == "" and self.player_black == "":
-                                        self.send_command("black_on", table)
-                                        continue
+                                    #if response["i"][4] == 1:
+                                    #    self.player_black = response["s"][2]
+                                    #    if response["i"][3] == 0: self.command("white", table)
+                                    
+                                    #if response["i"][3] == 1: self.player_white = response["s"][1]
+                                    #if response["i"][4] == 1: self.player_black = response["s"][2]
+                                    #if response["i"][3] == 0: self.command("white", table)
+                                    #if response["i"][4] == 0: self.command("black", table)
 
                                 # Tracking game status
                                 elif response["i"][0] == GAME_STATE: self.active_game = response["i"][3]
@@ -196,19 +193,26 @@ class PlayOK:
                                 if response["i"][0] == GAME_CHAT:
                                     if response["s"][0] == "+ you have been displaced by the table operator":
                                         print(f"TABLE #{table}: {self.user_name} has been displaced by the table operator")
-                                        self.send_command("leave", table)
+                                        self.command("leave", table)
                                         continue
 
                                 # Init game status
-                                status = "idling" if self.active_game == NONE else "playing"
-
-                                # Print table status
-                                print(f"TABLE #{table}: ({self.player_white}) vs ({self.player_black}) {status}")
+                                status = "idling" if self.active_game == -1 else "playing"
                                 
                                 # Request to start the game
                                 if status == "idling":
-                                    if self.engine_side != NONE and self.player_white != "" and self.player_black != "":
-                                        self.send_command("start", table)
+                                    if self.engine_side == 0 and self.player_white == self.user_name and self.player_black:
+                                        #self.command("start", table)
+                                        print(f"TABLE #{table}: {self.user_name} requests start as white")
+                                        continue
+                                        
+                                    if self.engine_side == 1 and self.player_black == self.user_name and self.player_white:
+                                        #self.command("start", table)
+                                        print(f"TABLE #{table}: {self.user_name} requests start as black")
+                                        continue
+
+                                # Print table status
+                                print(f"TABLE #{table}: ({self.player_white}) vs ({self.player_black}) {status}", self.engine_side)
 
                     except Exception as e: pass#print(e)
 
@@ -221,22 +225,28 @@ class PlayOK:
         move = self.engine.search()
         self.send_message({"i": [LOAD_MOVE, self.active_table, 1, move, 1]})
 
-    def send_command(self, action, table):
+    def accept_challenge(self, color, table):
+        self.command("join", table)
+        #self.command(color, table)
+        #print(f"TABLE #{table}")
+        
+        
+        
+        #self.command('start', table)
+
+    def command(self, action, table):
         # Command template
         request = {"i": [], "s": []}
         
         # Pick user command
         if action == "join": request["i"] = [JOIN_TABLE, table]
         elif action == "leave": request["i"] = [LEAVE_TABLE, table]
-        elif action == "white_on": request["i"] = [TAKE_SIDE, table, 0]
-        elif action == "white_off": request["i"] = [LEAVE_SIDE, table, 0]
-        elif action == "black_on": request["i"] = [TAKE_SIDE, table, 1]
-        elif action == "black_off": request["i"] = [LEAVE_SIDE, table, 1]
+        elif action == "take_white": request["i"] = [TAKE_SIDE, table, 0]
+        elif action == "leave_white": request["i"] = [LEAVE_SIDE, table, 0]
+        elif action == "take_black": request["i"] = [TAKE_SIDE, table, 1]
+        elif action == "leave_black": request["i"] = [LEAVE_SIDE, table, 0]
         elif action == "start": request["i"] = [START_GAME, table]
         elif action == "resign": request["i"] = [RESIGN_GAME, table, 4, 0]
         
         # Send user command to PlayOK
         self.send_message(request)
-        
-        self.user_status()
-        
