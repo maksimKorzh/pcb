@@ -72,13 +72,13 @@ class PlayOK:
     # Stay online
     def keep_alive(self):
         while self.running:
+            # Tell server user is online
             time.sleep(DELAY)
             if not self.running: break
             self.send_message(KEEP_ALIVE)
             
-            # Check user status
+            # Track state variables
             self.user_status()
-            
 
     # Send message to PlayOK WebSocket
     def send_message(self, message):
@@ -87,10 +87,7 @@ class PlayOK:
             return
         if isinstance(message, dict):
             message = json.dumps(message, separators=(",", ":"))
-            try:
-                self.ws.send(message)
-                #print(" <-:", end=" ")
-                #print(message[:75] + "..." if len(message) > 75 else message)
+            try: self.ws.send(message)
             except Exception as e:
                 print("SYSTEM:", e)
                 self.running = False
@@ -99,19 +96,20 @@ class PlayOK:
     def receive_messages(self):
         while self.running:
             try:
-                
-                
+                # Read message
                 message = self.ws.recv()
                 if not message: continue
+                
+                # Parse message
                 response = json.loads(message)
                 
-                # Player user name
+                # Get player user name
                 if response["i"][0] == LOGIN_INFO:
                     if self.user_name == "":
                         self.user_name = response["s"][0]
                         print(f"PLAYOK: Logged in as \"{self.user_name}\"")
                 
-                # Init table range
+                # Init player table range
                 if response["i"][0] == ACTIVE_CHALLENGES:
                     table = response["i"][1]
                     if self.table_range == (0, 0):
@@ -123,8 +121,8 @@ class PlayOK:
                         self.table_range = (first_table, last_table)
                         print(f"PLAYOK: Table range {self.table_range}")
 
+                # Keep track of user table
                 if response["i"][0] == USER_INFO:
-                    #print(f"INFO: {self.user_name} is at table {response["i"][2]}")
                     if response["i"][2] == 0: self.reset_state()
                     else: self.active_table = response["i"][2]
 
@@ -139,6 +137,7 @@ class PlayOK:
                             # Lobby actions
                             if not self.active_table:
                                 if response["i"][0] == ACTIVE_CHALLENGES:
+                                    # Show ongoing games
                                     print(f"LOBBY: Game ({response["s"][1]}) vs ({response["s"][2]}) at #{table}")
                                     
                                     # Join empty table
@@ -170,8 +169,6 @@ class PlayOK:
                                     try:
                                         moves = response["s"]
                                         for move in moves: self.engine.load_move(move)
-                                        #print(self.engine.board)
-                                        print(f"TABLE #{table}: Loaded game")
                                     except: pass
                                 
                                 # Load last move
@@ -209,28 +206,33 @@ class PlayOK:
                                         elif self.player_white == "" and self.player_black == "":
                                             self.send_command("leave", table)
 
+                                # Leave the game where engine does not participate
                                 elif status == "play" and self.player_white != self.user_name and self.player_black != self.user_name:
                                     self.send_command("leave", table)
                                     time.sleep(DELAY)
                                 
+                                # If engine plays white, make the first move, set first move flag
                                 elif status == "play" and self.engine_side == WHITE and self.first_move == NONE:
                                     self.send_move();
                                     self.first_move = WHITE
                                 
+                                # Set first move flag
                                 elif status == "play" and self.engine_side == BLACK and self.first_move == NONE:
                                     self.first_move = WHITE
 
-                    except Exception as e: pass#print(e)
+                    except : pass
 
             except Exception as e:
                 print("SYSTEM:", e)
                 self.running = False
                 break
 
+    # Send engine move to PlayOK
     def send_move(self):
         move = self.engine.search()
         self.send_message({"i": [LOAD_MOVE, self.active_table, 1, move, 1]})
 
+    # Send user action to PlayOK
     def send_command(self, action, table):
         # Command template
         request = {"i": [], "s": []}
@@ -245,8 +247,8 @@ class PlayOK:
         elif action == "start": request["i"] = [START_GAME, table]
         elif action == "resign": request["i"] = [RESIGN_GAME, table, 4, 0]
         
-        # Send user command to PlayOK
+        # Send user to WebSocket
         self.send_message(request)
         
+        # Track state variables
         self.user_status()
-        
