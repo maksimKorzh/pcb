@@ -29,10 +29,16 @@ if __name__ == "__main__":
         elif message == "info":
             print("running:", socket.running)
             print("active table:", socket.active_table)
+            print("player white:", socket.player_white)
+            print("player black:", socket.player_black)
             print("active game:", socket.active_game)
             print("engine side:", socket.engine_side)
             continue
         
+        elif message == "user":
+            socket.user_status()
+            continue
+
         elif message == "move":
             socket.send_move()
             continue
