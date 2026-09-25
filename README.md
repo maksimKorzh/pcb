@@ -1,4 +1,4 @@
-# PlayOK WebSocket Chess Bot
+# PlayOK Chess Bot
 
 A fully automated chess bot that connects a UCI chess engine to [PlayOK](https://www.playok.com/) through WebSocket protocol.
 
