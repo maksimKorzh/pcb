@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Preface — PCB</title>
+    <link rel="stylesheet" href="../style/style.css">
+</head>
+<body>
+    <main class="book">
+        <article class="chapter">
+            <nav class="chapter-nav">
+                <a href="../index.html">← Contents</a>
+            </nav>
+            <div class="chapter-label">Chapter 1</div>
+            <h2>Preface</h2>
+            <h3>Building a Chess Bot for PlayOK</h3>
+            <p class="lead">In this book, we are going to build a fully automated chess bot for <a href="https://www.playok.com/">PlayOK</a>. The goal is to create a program that can connect to the PlayOK server, behave like a normal user, accept challenges, join games, receive opponent moves, and send its own moves automatically.</p>
+            <p>The interesting part is that we are not going to build the chess-playing component ourselves. The chess engine already exists.</p>
+            <p>My chess engine is called <strong>ABC</strong>. I also wrote a book about <a href="https://maksimkorzh.github.io/abc/">building a chess engine</a>, where I explain how a chess engine can be built from the ground up.</p>
+            <p>ABC understands chess, but it knows nothing about PlayOK. It does not know how to connect to an online chess server, how to accept a challenge, how to interpret an opponent's move received from the server, or how to send its own move back to the server.</p>
+            <p>That is what we are going to build in this book.</p>
+            <p>We will essentially create a bridge between two completely different systems. On one side we have a UCI chess engine capable of calculating chess moves. On the other side we have an online chess server communicating through a WebSocket protocol.</p>
+            <p>When PlayOK tells us that the opponent has played a move, our program will interpret that message and update the chess position. We will then ask the UCI engine for a move. The engine might respond with something such as <code>e2e4</code>. Our program will then convert that move into the representation expected by PlayOK and send it through the WebSocket connection.</p>
+            <p>The result will be a chess bot that connects an ordinary UCI chess engine to an online chess server.</p>
+            <h3>WebSockets and Reverse Engineering</h3>
+            <p>WebSocket interaction feels super cool and mysterious when you do not know how it works. You open a website, connect to a server, and suddenly there is a stream of strange-looking messages moving back and forth between the browser and the server. You can see things happening in real time, but it is not immediately obvious what is actually going on.</p>
+            <p>And honestly, that is part of what makes WebSockets interesting.</p>
+            <p>When you do not know how they work, WebSocket traffic can look almost like some secret language spoken between the browser and the server. There are numbers, short strings, arrays, identifiers, commands, and pieces of information that seem to have no obvious meaning.</p>
+            <p>Once you understand how WebSockets work, the interaction becomes much less mysterious. But in a strange way, it looks even cooler. You can watch a browser communicate with a server in real time and start recognizing what individual messages are doing, which messages are sent by the client, which ones are received from the server, and how the entire application is built around that communication.</p>
+            <p>This is where WebSocket reverse engineering comes in.</p>
+            <p>WebSocket reverse engineering is the process of observing and analyzing the communication between a WebSocket client and server in order to understand the protocol being used.</p>
+            <p>The WebSocket protocol itself is not particularly mysterious. It provides a persistent, bidirectional communication channel between a client and a server. The interesting part is what an individual application chooses to send through that channel.</p>
+            <p>A website might send JSON objects, arrays, strings, binary data, or its own custom message format. It might assign numeric identifiers to different types of messages. It might encode information into compact arrays. It might maintain a state machine where one message only makes sense after several other messages have already been received.</p>
+            <p>When working with an application like this, documentation is often limited or completely unavailable. The browser already knows how to communicate with the server, but there may be no public documentation explaining exactly what every message means.</p>
+            <p>That is why reverse engineering is useful. Instead of guessing how the application works from the outside, we can watch the real client communicate with the real server. We can record the traffic, identify patterns, correlate messages with actions performed in the browser, inspect the JavaScript responsible for handling those messages, and gradually reconstruct the protocol.</p>
+            <p>The goal is not necessarily to understand every single message. Often, we only need to understand enough of the protocol to implement the particular functionality we are interested in.</p>
+            <h3>WebSocket Interaction and Web Scraping</h3>
+            <p>WebSocket reverse engineering has a lot in common with web scraping.</p>
+            <p>In web scraping, we are interested in information that a website exposes to a normal browser. Instead of manually reading that information, we inspect how the website delivers it and write a program that can obtain and process it automatically.</p>
+            <p>I wrote about a similar idea in my other book, <a href="https://maksimkorzh.github.io/aws/">Alternative Web Scraping</a>. That book focuses on an alternative approach to traditional web scraping: instead of trying to imitate a browser from a separate application, we can run the scraper directly inside the browser, using a Chrome extension and browser storage.</p>
+            <p>WebSocket reverse engineering starts from a similar idea. Instead of simply looking at the final HTML page, we investigate the communication that happens between the browser and the server. We observe what the browser sends, what the server sends back, and how those messages cause the application to change its state.</p>
+            <p>The important difference is that traditional web scraping is often concerned primarily with <strong>data</strong>. A scraper might request a page, parse its HTML, extract some information, and store it somewhere.</p>
+            <p>WebSocket interaction is more concerned with <strong>state and events</strong>.</p>
+            <p>A WebSocket connection can remain open while the application continuously exchanges messages. A message from the client might mean "join this table", "make this move", or "send this chat message". A message from the server might mean that another player has joined, that a game has started, that an opponent has made a move, or that the game has ended.</p>
+            <p>There is another important similarity. In both web scraping and WebSocket reverse engineering, we are often trying to understand what the normal browser is already doing and reproduce the useful parts of that behavior in our own program.</p>
+            <p>In the case of web scraping, we might reproduce the way a browser obtains information from a website. In the case of WebSockets, we reproduce the communication that allows the browser to interact with the application's backend.</p>
+            <p>In both cases, the browser becomes something we can observe and learn from.</p>
+            <h3>Our PlayOK Example</h3>
+            <p>For this book, we will use the WebSocket communication of <a href="https://www.playok.com/">PlayOK</a> as our practical example.</p>
+            <p>PlayOK is an online gaming website that supports several games, including chess. When you use the chess interface in a normal browser, the browser maintains a WebSocket connection to the PlayOK server and uses that connection to exchange information about the game and the surrounding application.</p>
+            <p>Our objective will be to reverse engineer enough of that communication to build our own automated chess client.</p>
+            <p>The interesting part is that we are not simply going to capture a few messages and hard-code them. We want to understand enough of the client-side logic to reproduce the important behavior of the real PlayOK client.</p>
+            <p>That means understanding what happens when the connection is established, what messages are sent by the browser, what the server sends in response, how the client identifies different types of messages, how game state is represented, and how chess moves are encoded.</p>
+            <h3>Looking at the Traffic</h3>
+            <p>The first practical step in reverse engineering a WebSocket connection is to stop guessing and watch what the browser is actually doing. Modern browsers already give us everything we need for this. We can use the developer tools to inspect the WebSocket connection and read the messages going back and forth between the browser and the server.</p>
+            <p>Open <strong>Chrome</strong> and navigate to <a href="https://www.playok.com/en/chess/">PlayOK</a>. Once the page is loaded, open the developer tools by pressing <code>F12</code>, or right-click the page and choose <strong>Inspect</strong>. You can also use <code>Ctrl+Shift+I</code> on Windows.</p>
+            <p>In the developer tools, open the <strong>Network</strong> tab. This tab shows the network activity generated by the page. It contains HTTP requests, images, scripts, WebSockets, and other network resources.</p>
+            <p>Because we are interested specifically in WebSockets, click the <strong>WS</strong> filter near the top of the Network panel. This filters the list so that we can see only WebSocket connections.</p>
+            <p>Now reload the page if necessary. A WebSocket connection should appear in the list. On PlayOK, we are interested in the connection to an address similar to <code>wss://x.playok.com:17003/ws/</code>. Click that connection to open its details.</p>
+            <p>The developer tools will show several tabs for the selected WebSocket connection. The one we are interested in is <strong>Messages</strong>.</p>
+            <p>The Messages view is essentially a live window into the conversation between the browser and the server. Every message sent by the browser and every message received from the server appears in the stream. This is one of the most useful tools we have when reverse engineering a WebSocket protocol.</p>
+            <p>For example, when the PlayOK page establishes the connection, we may see initial messages similar to this:</p>
+            <pre><code> <- {"i":[1710],"s":["+639191544908807788|1826467704|15538027","en","b","","Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36","/1790332105431/1","w","1920x1080 1","ref:https://www.playok.com/en/chess/","ver:263"]}
+ -> {"i":[18,1,1],"s":["nnk6619g","en","+639191544908807788","ch"]}</code></pre>
+            <p>The important thing is not to immediately assume that we understand what the numbers mean. At this stage, our job is simply to observe. We can record the message, perform an action in the browser, and then look at what changed.</p>
+            <p>This gives us a very useful experimental method. Suppose we want to understand what happens when we make a move in a chess game. We can start recording the WebSocket messages, make exactly one move on the board, and then look at the new messages that appeared. If we repeat the experiment several times with different moves, patterns begin to emerge.</p>
+            <p>We can do the same thing for almost every action: joining a table, accepting a challenge, starting a game, making a move, offering a draw, resigning, or leaving a table. Instead of trying to guess the protocol from scratch, we let the normal browser client show us what it sends and receives.</p>
+            <p>There is another useful technique here. Right-clicking inside the Network panel gives us options for preserving the captured traffic and copying network information. We can also leave the Network tab open while performing an action and then inspect the exact messages generated by that action. For longer investigations, it is useful to keep the network log enabled so that messages are not lost when the page navigates or reloads.</p>
+            <p>When inspecting a WebSocket stream, I usually ask a few simple questions:</p>
+            <ul>
+            <li>What message appears when the connection is first established?</li>
+            <li>Which messages are sent periodically?</li>
+            <li>What message appears when I perform a particular action?</li>
+            <li>Which message comes back from the server as a response?</li>
+            <li>Which numbers or strings remain constant?</li>
+            <li>Which values change from one action to another?</li>
+            <li>Can a value be correlated with something visible in the user interface?</li>
+            </ul>
+            <p>For example, PlayOK may send an interface-related message such as:</p>
+            <pre><code>{"i":[51],"s":["chr","recent messages","chd","delete all messages","bl_ad","add","bl_mr","more...","tu_bacc","accept","tu_brej","decline","tu_bcan","withdraw","bl_partinv","offer partnering","bl_whisper","chat","bl_newtab","new game table","bl_buds","contacts","bl_tbs","tables","bl_prefs","preferences","bl_cs","chats","tlh_tabpl","players","tl_join","join","bl_invite","invite","bl_boot","boot","bl_yes","yes","bl_no","no"]}</code></pre>
+            <p>We do not need to understand every field immediately. It is enough to recognize that this is server-to-client data and that it appears during a particular stage of the connection.</p>
+            <p>Then we might see a message going in the other direction:</p>
+            <pre><code>{"i":[64]}</code></pre>
+            <p>Again, the interesting question is not simply "what does 64 mean?" The better question is "what did I do immediately before this message appeared?" If we can reproduce the action and consistently get the same message, we have evidence that <code>64</code> represents some particular client command or state transition.</p>
+            <p>The same approach becomes especially interesting once we reach an actual chess game. We may see a large message containing a sequence of move strings:</p>
+            <pre><code>{"i":[91,301,2998,0,1804,0,2291,0,-36,2268,0,-36,2299,0,1739,0,3517,0,1162,0,2942,0,1350,0,1978,0,773,0,2738,0,2325,0,-13,798,0,-13,771,0,3321,0,-52,3300,0,-52,3299,0,388,327,0,4028,3967,0,2434,0,3901,0,1356,0,2285,0,261,0,2868,0,705,0,2161,0,1803,0,3063,0,2204,0,3251,0,742,0,3582,0],"s":["g3","e5","d4","exd4","Qxd4","d5","Bg2","c6","Nf3","Nf6","Bg5","Be7","c3","Ne4","Bxe7","Qxe7","Nbd2","Nxd2","Qxd2","O-O","O-O","Bg4","Rfe1","Qf6","Nd4","Re8","e3","Nd7","b4","Ne5","h3","Nc4","Qc2","Bd7","Kh2"]}</code></pre>
+            <p>Now we have something much more useful. The server has given us both numeric data and human-readable chess moves. We can compare the two arrays, compare them with the moves displayed on the board, and start figuring out how the protocol represents the game internally.</p>
+            <p>One particularly important technique is to perform <strong>one action at a time</strong>. If we click ten buttons and make three moves before looking at the traffic, it becomes difficult to know which message belongs to which action. Instead, reload the page, perform one operation, inspect the messages, record what changed, and repeat. This turns reverse engineering into a series of small experiments.</p>
+            <p>Once we understand the basic message flow, we can move one step deeper and inspect the JavaScript code that creates and processes those messages. The Network panel tells us <strong>what</strong> is happening. The browser's JavaScript can help us discover <strong>why</strong> it is happening and how the client constructs each message.</p>
+            <p>This combination is extremely powerful. The WebSocket stream gives us real examples of the protocol, while the client-side code can reveal the functions, constants, message identifiers, encoding routines, and state variables behind those examples.</p>
+            <p>That is how we will approach PlayOK throughout this book: observe first, change one thing at a time, capture the resulting traffic, correlate messages with actions, and only then start assigning meaning to the fields. The goal is not to guess what a mysterious number means. The goal is to collect enough evidence that the meaning becomes clear.</p>
+            <div class="note">
+                <div class="note-title">Watch Before You Guess</div>
+                <p>The fastest way to understand an unknown WebSocket protocol is to observe the browser first. Capture the traffic, perform one action at a time, and correlate each action with the messages it produces. This gives us evidence instead of assumptions.</p>
+            </div>
+            <h3>From Protocol to Bot</h3>
+            <p>Eventually, the goal is to turn this collection of observations into working code.</p>
+            <p>Our bot will need to maintain the same kind of state that the browser maintains. It will need to know whether it is connected, whether it has joined a table, whether a game is active, whose turn it is, and what the current chess position looks like.</p>
+            <p>It will also need to understand the messages that matter to us and ignore the ones that are unrelated to the chess game.</p>
+            <p>When an opponent makes a move, the bot will receive a WebSocket message. We will decode that message, obtain the chess move, and update our local chess board. We will then ask ABC to calculate a response.</p>
+            <p>The UCI engine will return a normal chess move. Our program will then translate that move into the representation used by PlayOK and send the appropriate WebSocket message back to the server.</p>
+            <p>This is the central idea of the entire project: <strong>mimic the client-side logic of PlayOK while using a UCI chess engine as the source of chess moves.</strong></p>
+            <p>We are not replacing the chess engine. We are not replacing the PlayOK server. We are building the missing layer that allows the two systems to communicate with each other.</p>
+            <h3>What We Will Learn</h3>
+            <p>To build that bridge, we will have to understand much more than simply how to open a WebSocket connection.</p>
+            <p>We will learn how to observe WebSocket traffic, distinguish client messages from server messages, identify message types, correlate network traffic with actions performed in the browser, inspect client-side JavaScript, understand application state, decode custom data formats, and reproduce the relevant parts of the browser's behavior.</p>
+            <p>We will also have to deal with practical problems. A protocol that looks simple in a few captured messages can become considerably more complicated once we try to implement it ourselves. The order of messages can matter. Some messages may only be valid after certain events have happened. The server may expect particular values or particular sequences of actions.</p>
+            <p>That is what makes reverse engineering different from simply reading an API documentation page. We are discovering how an existing system actually works by observing it in operation.</p>
+            <p>By the end of the book, we should have gone from a collection of mysterious WebSocket messages to a working understanding of the protocol and a program capable of using that protocol to operate a chess bot.</p>
+            <p>The interesting part is not just the final bot. The interesting part is the process of getting there.</p>
+            <div class="note">
+                <div class="note-title">One Action at a Time</div>
+                <p>When reverse engineering a live application, avoid clicking several things at once. Perform one action, capture the resulting messages, then repeat. Small, controlled experiments make it much easier to determine which message belongs to which operation.</p>
+            </div>
+            <nav class="chapter-nav-bottom">
+                <a href="../index.html">← CONTENTS</a>
+                <a href="project.html" class="next">Next →</a>
+            </nav>
+        </article>
+    </main>
+</body>
+</html>

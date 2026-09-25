@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Connecting to PlayOK — PCB</title>
+    <link rel="stylesheet" href="../style/style.css">
+</head>
+<body>
+    <main class="book">
+        <article class="chapter">
+            <nav class="chapter-nav">
+                <a href="../index.html">← Contents</a>
+            </nav>
+            <div class="chapter-label">Chapter 5</div>
+            <h2>Connecting to PlayOK</h2>
+            <p class="lead">We now have the two pieces we need on the client side: the configuration module knows how to describe the PlayOK connection, and the engine module knows how to communicate with our chess engine. The next step is to create the PlayOK client itself and establish the WebSocket connection.</p>
+            <p>This chapter focuses only on the connection layer. We are not going to implement PlayOK functionality yet. Those features will be added later as we reverse engineer the corresponding messages.</p>
+            <h3>The PlayOK Client</h3>
+            <p>Our PlayOK client is represented by the <code>PlayOK</code> class.</p>
+            <pre><code>class PlayOK:
+    def __init__(self):
+        # WebSocket state
+        self.ws = None
+        self.keep_alive_thread = None
+        self.receive_thread = None
+        self.running = False
+        
+        # PlayOK state
+        self.table_range = (0, 0)
+        self.active_table = 0
+        self.active_game = NONE
+        self.user_name = ""
+        self.player_white = ""
+        self.player_black = ""
+        self.engine_side = NONE
+        self.first_move = NONE
+        
+        # Chess engine
+        self.engine = ChessEngine()</code></pre>
+            <p>The class contains three groups of state: WebSocket state, PlayOK game state, and chess engine state.</p>
+            <p>At this stage, most of the PlayOK game variables are simply initialized. We will use them later when we start processing the messages sent by the server.</p>
+            <h3>WebSocket State</h3>
+            <p>The first group describes the connection itself.</p>
+            <pre><code>self.ws = None
+self.keep_alive_thread = None
+self.receive_thread = None
+self.running = False</code></pre>
+            <p><code>self.ws</code> will hold the actual WebSocket object. Before connecting, it is <code>None</code>.</p>
+            <p><code>keep_alive_thread</code> and <code>receive_thread</code> will later contain the background threads responsible for keeping the connection alive and receiving messages from PlayOK.</p>
+            <p>Finally, <code>running</code> is our main connection state. It tells the background threads whether the client should continue operating.</p>
+            <p>Using a single state variable like this is useful because both background loops need to stop when the connection is closed. Instead of maintaining separate shutdown conditions, they can simply check whether <code>self.running</code> is still true.</p>
+            <h3>PlayOK State</h3>
+            <p>The next group contains information about the user's current PlayOK session.</p>
+            <pre><code>self.table_range = (0, 0)
+self.active_table = 0
+self.active_game = NONE
+self.user_name = ""
+self.player_white = ""
+self.player_black = ""
+self.engine_side = NONE
+self.first_move = NONE</code></pre>
+            <p>These variables do not establish the WebSocket connection itself. They represent information that we will learn from the PlayOK server after the connection has been established.</p>
+            <p>For example, <code>active_table</code> will eventually identify the table on which our bot is currently playing. <code>active_game</code> will track the current game, while <code>player_white</code> and <code>player_black</code> will contain the players taking part in it.</p>
+            <p><code>engine_side</code> will tell us whether our engine is playing White or Black. Until the server tells us which side we have taken, its value is <code>NONE</code>.</p>
+            <p>At this stage, we do not need to do anything with these variables. We are simply preparing the state that the later parts of the client will use.</p>
+            <h3>Creating the Chess Engine</h3>
+            <p>The final line of the constructor creates our chess engine object:</p>
+            <pre><code>self.engine = ChessEngine()</code></pre>
+            <p>This means that the PlayOK client owns an instance of the engine module. When a game eventually starts, the PlayOK client will be able to pass opponent moves to the engine and request a response.</p>
+            <p>Notice that the PlayOK class does not implement any chess logic itself. It delegates that responsibility to <code>ChessEngine</code>. This keeps the two parts independent.</p>
+            <h3>Resetting PlayOK State</h3>
+            <p>The client also has a method for resetting the state associated with a game.</p>
+            <pre><code>def reset_state(self):
+self.active_table = 0
+self.active_game = NONE
+self.player_white = ""
+self.player_black = ""
+self.engine_side = NONE
+self.first_move = NONE</code></pre>
+            <p>This is useful because the same client can participate in more than one game during its lifetime. When a game finishes, we need a reliable way to remove information from the previous game before starting another one.</p>
+            <p>Again, this method does not close the WebSocket connection. It only resets the PlayOK game state.</p>
+            <h3>Establishing the WebSocket Connection</h3>
+            <p>The actual connection is created by the <code>connect()</code> method.</p>
+            <pre><code>def connect(self):
+    try:
+        self.ws = websocket.WebSocket()
+        self.ws.connect(WS_URL, origin="null", header=["User-Agent: " + USER_AGENT])
+        self.running = True
+        self.send_message(CREDENTIALS)
+        self.keep_alive_thread = threading.Thread(target=self.keep_alive, daemon=True)
+        self.receive_thread = threading.Thread(target=self.receive_messages, daemon=True)
+        self.keep_alive_thread.start()
+        self.receive_thread.start()
+    except Exception as e:
+        print("SYSTEM: WebSocket connection error:", e)
+        self.running = False</code></pre>
+            <p>The first line creates a WebSocket object provided by the <code>websocket</code> Python package.</p>
+            <pre><code>self.ws = websocket.WebSocket()</code></pre>
+            <p>At this point we have a WebSocket object, but it is not connected to PlayOK yet.</p>
+            <p>The actual connection happens here:</p>
+            <pre><code>self.ws.connect(
+    WS_URL,
+    origin="null",
+    header=["User-Agent: " + USER_AGENT]
+)</code></pre>
+            <p><code>WS_URL</code> comes from <code>config.py</code> and contains the PlayOK WebSocket endpoint. We also provide the browser-like user-agent that we observed while inspecting the original PlayOK client.</p>
+            <p>The <code>Origin</code> value is also explicitly provided. This is important because a WebSocket handshake contains HTTP headers, and servers can use those headers when deciding whether to accept a connection. Our goal here is to reproduce the relevant connection behavior of the browser client rather than simply opening an arbitrary WebSocket connection.</p>
+            <h3>The Connection Handshake</h3>
+            <p>Although the code above looks like a single function call, a WebSocket connection begins with an HTTP-based handshake.</p>
+            <p>The client first contacts the server and asks to upgrade the HTTP connection to WebSocket. If the server accepts the request, the connection is upgraded and becomes a persistent WebSocket connection.</p>
+            <p>After that upgrade, we no longer communicate with PlayOK by making independent HTTP requests for every message. Instead, the same connection remains open and both sides can send messages through it.</p>
+            <p>This is the fundamental reason WebSockets are useful for an application such as an online chess server. The server can immediately notify the browser about changes without requiring the browser to repeatedly ask whether something happened.</p>
+            <h3>Marking the Client as Running</h3>
+            <p>Once the connection succeeds, we set:</p>
+            <pre><code>self.running = True</code></pre>
+            <p>This is deliberately done only after the WebSocket connection has been established. The background threads use this value to determine whether they should continue running.</p>
+            <p>If the connection fails, execution jumps to the exception handler and <code>running</code> remains false.</p>
+            <h3>Sending the Initial Credentials Message</h3>
+            <p>After connecting, the first application-level message we send is the credential or initialization message:</p>
+            <pre><code>self.send_message(CREDENTIALS)</code></pre>
+            <p>This is separate from the WebSocket handshake. The handshake establishes the WebSocket transport, while this message belongs to the PlayOK application protocol running on top of that transport.</p>
+            <p>This distinction is important throughout the project. There are really two layers involved:</p>
+            <ol>
+                <li>The WebSocket layer establishes and maintains the communication channel.</li>
+                <li>The PlayOK protocol defines what the messages inside that channel mean.</li>
+            </ol>
+            <p>Our reverse engineering work is primarily concerned with the second layer.</p>
+            <h3>Why Use Background Threads?</h3>
+            <p>After sending the initial message, the client starts two background threads.</p>
+            <pre><code>self.keep_alive_thread = threading.Thread(
+    target=self.keep_alive,
+    daemon=True
+)
+
+self.receive_thread = threading.Thread(
+    target=self.receive_messages,
+    daemon=True
+)</code></pre>
+            <p>The first thread handles the periodic keep-alive activity. The second thread will continuously receive messages from the WebSocket.</p>
+            <p>This separation is necessary because receiving from a WebSocket is normally a blocking operation. If the main program waited for incoming messages continuously, it would not be able to perform other tasks at the same time.</p>
+            <p>Similarly, keep-alive messages need to be sent periodically even when the server is not sending anything to us.</p>
+            <p>Using separate threads allows both activities to happen independently:</p>
+            <pre><code>Main program
+    │
+    ├── Keep-alive thread
+    │       └── periodically sends messages
+    │
+    └── Receive thread
+            └── waits for incoming messages</code></pre>
+            <p>Both threads are marked as daemon threads. This means they will not prevent the Python process from exiting when the main program terminates.</p>
+            <h3>Starting the Threads</h3>
+            <p>After creating the threads, we start them:</p>
+            <pre><code>self.keep_alive_thread.start()
+self.receive_thread.start()</code></pre>
+            <p>At this point the basic client is alive. The WebSocket connection is established, the initial PlayOK message has been sent, one thread is responsible for keeping the session alive, and another is waiting for messages from the server.</p>
+            <p>The receive method is not implemented in this chapter because it will become the subject of the next chapter. For now, the important part is understanding where it fits into the architecture.</p>
+            <h3>Keeping the Connection Alive</h3>
+            <p>The keep-alive logic is implemented in the <code>keep_alive()</code> method.</p>
+            <pre><code>def keep_alive(self):
+    while self.running:
+        # Tell server user is online
+        time.sleep(DELAY)
+        if not self.running: break
+        self.send_message(KEEP_ALIVE)
+        
+        # Track state variables
+        self.user_status()</code></pre>
+            <p>The loop continues while <code>self.running</code> is true.</p>
+            <p>First, the client waits for the configured delay:</p>
+            <pre><code>time.sleep(DELAY)</code></pre>
+            <p>After the delay, it checks the connection state again. This second check is useful because the client may have been closed while the thread was sleeping.</p>
+            <p>If the client is still running, it sends the keep-alive message defined in <code>config.py</code>:</p>
+            <pre><code>self.send_message(KEEP_ALIVE)</code></pre>
+            <p>Our configuration defines this message as:</p>
+            <pre><code>{"i": []}</code></pre>
+            <p>This is an example of an application-level heartbeat. It is not the same thing as a low-level WebSocket ping frame. It is an ordinary PlayOK message whose meaning is defined by the PlayOK protocol.</p>
+            <p>After sending the keep-alive, the client also requests the current user information:</p>
+            <pre><code>self.user_status()</code></pre>
+            <p>It also sends a user information request specifically to force PlayOK to report the table associated with the current user. We use this response to detect state changes such as being booted from a table. Without periodically requesting this information, the bot can continue believing that it is still sitting at a table after another user has removed it, causing its internal state to become desynchronized from the actual PlayOK state.</p>
+<p>Later, the receive-message logic will use this information to detect such changes and update the current table and game state variables accordingly.</p>
+            <h3>Checking User Status</h3>
+            <p>The <code>user_status()</code> method is intentionally very small:</p>
+            <pre><code>def user_status(self):
+    self.send_message({"i": [USER_INFO], "s": [self.user_name]})</code></pre>
+            <p>It constructs a PlayOK protocol message using the <code>USER_INFO</code> opcode from <code>config.py</code>.</p>
+            <p>The important design principle here is that the rest of the application does not need to know that <code>USER_INFO</code> corresponds to a particular numeric value. The protocol constant gives the message a meaningful name.</p>
+            <h3>Sending Messages</h3>
+            <p>All outgoing PlayOK messages go through a single method:</p>
+            <pre><code>def send_message(self, message):
+    if not self.ws or not self.running:
+        print("SYSTEM: WebSocket is not connected")
+        return
+    if isinstance(message, dict):
+        message = json.dumps(message, separators=(",", ":"))
+        try: self.ws.send(message)
+        except Exception as e:
+            print("SYSTEM:", e)
+            self.running = False</code></pre>
+            <p>This gives the client one central place for sending application-level messages.</p>
+            <p>Before sending anything, the method checks whether a WebSocket exists and whether the client is currently running:</p>
+            <pre><code>if not self.ws or not self.running:
+    print("SYSTEM: WebSocket is not connected")
+    return</code></pre>
+            <p>This prevents other parts of the application from attempting to send messages after the connection has already been closed or before it has been established.</p>
+            <h3>Converting Python Data to JSON</h3>
+            <p>Most of our protocol messages are represented inside Python as dictionaries and lists. The WebSocket, however, needs the actual serialized message.</p>
+            <p>Therefore, if the supplied value is a Python dictionary, we convert it to JSON:</p>
+            <pre><code>message = json.dumps(message, separators=(",", ":"))</code></pre>
+            <p>The custom separators remove unnecessary spaces from the generated JSON. This produces a compact representation that is closer to the compact messages observed in the browser's WebSocket traffic.</p>
+            <p>For example, a Python dictionary representing a protocol message can be converted into a compact JSON string before being sent through the WebSocket.</p>
+            <p>There is an important detail here that we will encounter again later: serializing a Python object into JSON is not the same thing as understanding the PlayOK protocol. JSON only describes the outer representation. The meaning of the arrays, numbers, and strings inside that JSON is defined by PlayOK itself.</p>
+            <h3>Handling Send Errors</h3>
+            <p>The actual WebSocket transmission is wrapped in an exception handler:</p>
+            <pre><code>try: self.ws.send(message)
+except Exception as e:
+    print("SYSTEM:", e)
+    self.running = False</code></pre>
+            <p>If the connection disappears or the socket encounters another error while sending, the client reports the error and marks itself as no longer running.</p>
+            <p>Changing <code>running</code> to false also gives the background threads a signal to stop. The keep-alive loop will eventually see that the client is no longer running and terminate.</p>
+            <h3>Closing the Connection</h3>
+            <p>The opposite operation is handled by <code>close()</code>.</p>
+            <pre><code>def close(self):
+    self.running = False
+    if self.ws:
+        try:
+            self.ws.close()
+            self.engine.close()
+            print("SYSTEM: WebSocket connection closed")
+            print("SYSTEM: Chess engine closed")
+        except Exception: pass</code></pre>
+            <p>The first thing we do is set <code>running</code> to false. This tells the background threads that the application is shutting down.</p>
+            <p>We then close the WebSocket itself. Finally, we close the chess engine that was created when the <code>PlayOK</code> object was initialized.</p>
+            <p>It is important that both resources are closed. The WebSocket is an external network connection, while the UCI engine is an external process. Leaving either one running after the bot exits can create problems during development and testing.</p>
+            <h3>What We Have Built So Far</h3>
+            <p>At the end of this chapter, our client still cannot play chess. It cannot accept a challenge, join a table, detect a game, or send a move. That is intentional.</p>
+            <p>What we have built is the foundation underneath all of those features:</p>
+            <ol>
+                <li>Create the PlayOK client.</li>
+                <li>Start the UCI chess engine.</li>
+                <li>Open the PlayOK WebSocket connection.</li>
+                <li>Send the initial PlayOK connection message.</li>
+                <li>Start a background keep-alive loop.</li>
+                <li>Start a background receive loop.</li>
+                <li>Provide a central method for sending JSON messages.</li>
+                <li>Provide a clean way to close the connection and engine.</li>
+            </ol>
+            <p>The most important thing to understand is that we now have a persistent communication channel. The browser normally maintains this channel while the user is on PlayOK, and our Python client will do the same thing.</p>
+            <p>From here onward, the interesting part begins. Instead of simply connecting to PlayOK, we need to understand what PlayOK sends back to us and what those messages mean. The receive thread will become our window into the server's state, and by examining those messages we can gradually teach our simplified client how to behave like the original browser client.</p>
+            <div class="note">
+                <div class="note-title">Transport Is Not the Protocol</div>
+                <p>The WebSocket gives us a persistent connection, but it does not tell us what the messages mean. The actual PlayOK protocol lives on top of that connection. First we establish the transport; then we implement the application-level messages that travel through it.</p>
+            </div>
+            <nav class="chapter-nav-bottom">
+                <a href="engine.html">← Previous</a>
+                <a href="receive.html" class="next">Next →</a>
+            </nav>
+        </article>
+    </main>
+</body>
+</html>

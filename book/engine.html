@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UCI Chess Engine — PCB</title>
+    <link rel="stylesheet" href="../style/style.css">
+</head>
+<body>
+    <main class="book">
+        <article class="chapter">
+            <nav class="chapter-nav">
+                <a href="../index.html">← Contents</a>
+            </nav>
+            <div class="chapter-label">Chapter 4</div>
+            <h2>UCI Chess Engine Module</h2>
+            <p class="lead">The PlayOK client knows how to communicate with the server, but it does not know how to play chess. For that we need another component: the UCI chess engine. In this project, <code>engine.py</code> is the bridge between our chess engine and the PlayOK protocol.</p>
+            <p>The engine itself already understands chess. It understands positions, legal moves, search, evaluation, and the UCI protocol. What it does not understand is PlayOK's internal move representation. Our Python module therefore has two jobs: communicate with the UCI engine and translate the engine's chess moves into the compact integer representation expected by PlayOK.</p>
+            <h3>Imports</h3>
+            <pre><code># Packages
+import chess
+import chess.engine
+from config import *</code></pre>
+            <p>The first two imports come from <code>python-chess</code>. The <code>chess</code> package provides the chess board and move representation, while <code>chess.engine</code> provides the interface for communicating with a UCI engine.</p>
+            <p>The configuration module provides values such as <code>ENGINE_PATH</code> and <code>SEARCH_TIME</code>. This means the engine module does not need to know where the executable is located or how much time it should spend searching.</p>
+            <h3>The ChessEngine Class</h3>
+            <p>Everything related to the chess engine is contained in the <code>ChessEngine</code> class.</p>
+            <pre><code>class ChessEngine:
+    # Create chess board
+    def __init__(self):
+        self.board = chess.Board()
+        self.engine = chess.engine.SimpleEngine.popen_uci(ENGINE_PATH)</code></pre>
+            <p>When a <code>ChessEngine</code> object is created, two things happen. First, a new chess board is created. Second, the UCI engine executable is started.</p>
+            <p><code>chess.Board()</code> creates a standard chess position with all pieces in their initial locations. The board will be maintained by our Python program so that the engine always knows the current game position.</p>
+            <p>The second line starts the external chess engine through UCI. <code>SimpleEngine.popen_uci()</code> launches the executable and establishes the communication channel that python-chess will use to send commands and receive engine responses.</p>
+            <p>From this point forward, we do not need to manually construct UCI commands. Python-chess handles the UCI communication for us.</p>
+            <h3>Starting a New Game</h3>
+            <pre><code>def new_game(self):
+    self.board.reset()</code></pre>
+            <p>Every chess game starts with a fresh position. The <code>new_game()</code> method resets the board to the standard starting position.</p>
+            <p>This is important because the same engine object can be used for multiple games. After one game finishes, we do not want the next game to inherit the previous game's position.</p>
+            <p>The engine process itself does not need to be recreated for every game. We can keep the UCI engine running and simply reset the position maintained by our Python-side board.</p>
+            <h3>Loading an Opponent Move</h3>
+            <p>When our opponent makes a move on PlayOK, the PlayOK client receives that move. The engine must then be informed about it.</p>
+            <pre><code>def load_move(self, move):
+    try: self.board.push_san(move)
+    except ValueError as e:
+        raise ValueError(
+            f"Invalid move '{move}' at position {self.board.fullmove_number}: {e}"
+        )</code></pre>
+            <p>The PlayOK protocol gives us a human-readable chess move, such as a normal SAN move. The <code>push_san()</code> method takes that move and applies it to the board.</p>
+            <p>This is an important separation of responsibilities. PlayOK tells us what happened in the game. The engine module takes that information and updates its own representation of the position.</p>
+            <p>If PlayOK gives us an invalid move for the current position, <code>python-chess</code> raises a <code>ValueError</code>. We catch that error and add useful context before raising it again. Instead of seeing only a generic parsing error, we can see which move caused the problem and at which point in the game it happened.</p>
+            <h3>Asking the Engine for a Move</h3>
+            <p>The most important method in this module is <code>search()</code>.</p>
+            <pre><code>def search(self):
+    result = self.engine.play(self.board.copy(), chess.engine.Limit(time=SEARCH_TIME))
+    source = result.move.from_square ^ 56
+    target = result.move.to_square ^ 56
+    move = source | (target &lt;&lt; 6)
+    if result.move.promotion: move |= (1 &lt;&lt; 12)
+    return move</code></pre>
+            <p>The first line asks the UCI engine to calculate a move.</p>
+            <pre><code>result = self.engine.play(
+    self.board.copy(),
+    chess.engine.Limit(time=SEARCH_TIME)
+)</code></pre>
+            <p>We pass a copy of our current board to the engine. The search is limited by <code>SEARCH_TIME</code>, which comes from <code>config.py</code>.</p>
+            <p>The result contains a python-chess <code>Move</code> object. Conceptually, the move contains a source square and a target square. For example, an engine result could represent a move from <code>e2</code> to <code>e4</code>.</p>
+            <p>This is where we leave the world of normal chess notation and enter the PlayOK protocol.</p>
+            <h3>Why Do We Need Move Conversion?</h3>
+            <p>UCI and PlayOK do not represent chess moves in the same way.</p>
+            <p>A UCI engine might return:</p>
+            <pre><code>e2e4</code></pre>
+            <p>To a human, this is perfectly understandable. It means move the piece from <code>e2</code> to <code>e4</code>.</p>
+            <p>PlayOK, however, does not send this string when it needs to represent a move internally. The protocol uses a compact integer containing the source and target square information.</p>
+            <p>For a loaded move, the relevant PlayOK message has the following general structure:</p>
+            <pre><code>{"i": [LOAD_MOVE, self.active_table, 1, move, 1]}</code></pre>
+            <p>The value represented by <code>move</code> is therefore not a UCI string. It is a packed integer. Our <code>search()</code> method converts the python-chess move into exactly this representation.</p>
+            <h3>Understanding python-chess Square Numbers</h3>
+            <p>To understand the conversion, we first need to understand how python-chess numbers the chess board.</p>
+            <p>python-chess uses a zero-based square index. The squares are numbered from <code>a1 = 0</code> through <code>h8 = 63</code>.</p>
+            <p>The important detail is that the numbering starts at the bottom-left from White's perspective and proceeds across the first rank before moving to the next rank.</p>
+            <pre><code>                 python-chess square numbers
+        
+                a   b   c   d   e   f   g   h
+              +---+---+---+---+---+---+---+---+
+        8     |56 |57 |58 |59 |60 |61 |62 |63 |
+              +---+---+---+---+---+---+---+---+
+        7     |48 |49 |50 |51 |52 |53 |54 |55 |
+              +---+---+---+---+---+---+---+---+
+        6     |40 |41 |42 |43 |44 |45 |46 |47 |
+              +---+---+---+---+---+---+---+---+
+        5     |32 |33 |34 |35 |36 |37 |38 |39 |
+              +---+---+---+---+---+---+---+---+
+        4     |24 |25 |26 |27 |28 |29 |30 |31 |
+              +---+---+---+---+---+---+---+---+
+        3     |16 |17 |18 |19 |20 |21 |22 |23 |
+              +---+---+---+---+---+---+---+---+
+        2     | 8 | 9 |10 |11 |12 |13 |14 |15 |
+              +---+---+---+---+---+---+---+---+
+        1     | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 |
+              +---+---+---+---+---+---+---+---+</code></pre>
+            <p>For example, python-chess represents <code>e2</code> as square <code>12</code>, while <code>e4</code> is square <code>28</code>.</p>
+            <p>But PlayOK's internal numbering is oriented differently. To convert between these two representations, our code uses an XOR operation with <code>56</code>.</p>
+            <h3>The PlayOK Board Orientation</h3>
+            <p>The conversion is:</p>
+            <pre><code>playok_square = python_chess_square ^ 56</code></pre>
+            <p>The XOR operation changes the square numbering so that the board is effectively flipped vertically. The files remain in the same left-to-right order, while the ranks are reversed.</p>
+            <p>We can visualize the relationship like this:</p>
+            <pre><code>                          python-chess                          PlayOK representation
+
+                a   b   c   d   e   f   g   h              a   b   c   d   e   f   g   h
+              +---+---+---+---+---+---+---+---+          +---+---+---+---+---+---+---+---+
+        8     |56 |57 |58 |59 |60 |61 |62 |63 |    8     | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 |
+              +---+---+---+---+---+---+---+---+          +---+---+---+---+---+---+---+---+
+        7     |48 |49 |50 |51 |52 |53 |54 |55 |    7     | 8 | 9 |10 |11 |12 |13 |14 |15 |
+              +---+---+---+---+---+---+---+---+          +---+---+---+---+---+---+---+---+
+        6     |40 |41 |42 |43 |44 |45 |46 |47 |    6     |16 |17 |18 |19 |20 |21 |22 |23 |
+              +---+---+---+---+---+---+---+---+          +---+---+---+---+---+---+---+---+
+        5     |32 |33 |34 |35 |36 |37 |38 |39 |    5     |24 |25 |26 |27 |28 |29 |30 |31 |
+              +---+---+---+---+---+---+---+---+          +---+---+---+---+---+---+---+---+
+        4     |24 |25 |26 |27 |28 |29 |30 |31 |    4     |32 |33 |34 |35 |36 |37 |38 |39 |
+              +---+---+---+---+---+---+---+---+          +---+---+---+---+---+---+---+---+
+        3     |16 |17 |18 |19 |20 |21 |22 |23 |    3     |40 |41 |42 |43 |44 |45 |46 |47 |
+              +---+---+---+---+---+---+---+---+          +---+---+---+---+---+---+---+---+
+        2     | 8 | 9 |10 |11 |12 |13 |14 |15 |    2     |48 |49 |50 |51 |52 |53 |54 |55 |
+              +---+---+---+---+---+---+---+---+          +---+---+---+---+---+---+---+---+
+        1     | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 |    1     |56 |57 |58 |59 |60 |61 |62 |63 |
+              +---+---+---+---+---+---+---+---+          +---+---+---+---+---+---+---+---+</code></pre>
+            <p>There is an important detail here: we are not changing the chess move itself. The move is still from one chess square to another. We are only changing the numerical representation of those squares so that it matches the representation expected by PlayOK.</p>
+            <h3>Why XOR 56?</h3>
+            <p>The number <code>56</code> is not arbitrary. It corresponds to the bit pattern needed to flip the rank portion of the six-bit square index.</p>
+            <p>A chess board contains 64 squares, so six bits are sufficient to represent every square:</p>
+            <pre><code>0 through 63 = 6 bits</code></pre>
+            <p>The square index can be thought of as two three-bit components: one for the file and one for the rank.</p>
+            <p>The number <code>56</code> is:</p>
+            <pre><code>56 = binary 111000</code></pre>
+            <p>The lower three bits represent the file, while the upper three bits represent the rank. XORing with <code>111000</code> changes the rank bits while leaving the file bits unchanged.</p>
+            <p>That is exactly what we need. We want <code>a</code> through <code>h</code> to remain in the same order, while the ranks are flipped.</p>
+            <p>For example, python-chess gives <code>e2 = 12</code>:</p>
+            <pre><code>12      = 001100
+56      = 111000
+          ------
+12 ^ 56 = 110100 = 52</code></pre>
+            <p>Therefore PlayOK's square number for <code>e2</code> is <code>52</code>.</p>
+            <p>For <code>e4</code>, python-chess gives <code>28</code>:</p>
+            <pre><code>28      = 011100
+56      = 111000
+          ------
+28 ^ 56 = 100100 = 36</code></pre>
+            <p>Therefore PlayOK's square number for <code>e4</code> is <code>36</code>.</p>
+            <h3>Encoding e2e4</h3>
+            <p>Now we can follow the entire conversion for a real move.</p>
+            <p>Suppose the UCI engine returns:</p>
+            <pre><code>e2e4</code></pre>
+            <p>python-chess gives us the source and target squares:</p>
+            <pre><code>e2 = 12
+e4 = 28</code></pre>
+            <p>Our code converts both values using XOR:</p>
+            <pre><code>source = 12 ^ 56
+       = 52
+
+target = 28 ^ 56
+       = 36</code></pre>
+            <p>We now have the PlayOK square values:</p>
+            <pre><code>source = 52
+target = 36</code></pre>
+            <p>The next step is to pack these two values into one integer.</p>
+            <h3>Packing Source and Target into One Integer</h3>
+            <p>PlayOK stores the source square in the lower six bits and the target square in the next six bits.</p>
+            <p>The expression used by our code is:</p>
+            <pre><code>move = source | (target &lt;&lt; 6)</code></pre>
+            <p>The left shift moves the target six positions to the left, leaving the lower six bits available for the source square.</p>
+            <p>For <code>e2e4</code>:</p>
+            <pre><code>source = 52
+target = 36
+
+target &lt;&lt; 6
+= 36 &times; 64
+= 2304
+
+move
+= 52 | 2304
+= 2356</code></pre>
+    <p>So the PlayOK move integer for <code>e2e4</code> is:</p>
+    <pre><code>2356</code></pre>
+    <p>We can see the same thing in binary:</p>
+    <pre><code>source = 52
+52     = 110100
+
+target = 36
+36     = 100100
+
+target &lt;&lt; 6
+        = 100100000000
+
+source
+        = 000000110100
+
+OR
+        = 100100110100</code></pre>
+            <p>The resulting binary value contains the target in the upper six bits and the source in the lower six bits.</p>
+            <p>This is why the expression works:</p>
+            <pre><code>source | (target &lt;&lt; 6)</code></pre>
+            <p>There is no overlap between the two values because each square uses exactly six bits.</p>
+            <h3>Another Example: e7e5</h3>
+            <p>Let's encode another common opening move: <code>e7e5</code>.</p>
+            <p>python-chess represents the squares as:</p>
+            <pre><code>e7 = 52
+e5 = 36</code></pre>
+            <p>Apply the PlayOK transformation:</p>
+            <pre><code>source = 52 ^ 56
+       = 12
+
+target = 36 ^ 56
+       = 28</code></pre>
+            <p>Now pack the values:</p>
+            <pre><code>move = 12 | (28 &lt;&lt; 6)
+
+28 &times; 64 = 1792
+
+move = 12 | 1792
+     = 1804</code></pre>
+            <p>So <code>e7e5</code> becomes the PlayOK move integer <code>1804</code>.</p>
+            <p>This also demonstrates an important property of the encoding. The transformation is reversible. If PlayOK gives us a packed move, we can extract the source and target values and apply the same XOR transformation to get back to python-chess square numbers.</p>
+            <h3>Extracting the Source and Target</h3>
+            <p>The lower six bits contain the source square, so we can obtain it with a bit mask:</p>
+            <pre><code>source = move &amp; 63</code></pre>
+            <p>The target is stored six bits higher, so we shift the value back:</p>
+            <pre><code>target = (move &gt;&gt; 6) &amp; 63</code></pre>
+            <h3>Promotion Moves</h3>
+            <p>There is one additional piece of information that does not fit into the twelve bits used for the source and target squares: pawn promotion.</p>
+            <p>The code handles this with:</p>
+            <pre><code>if result.move.promotion:
+    move |= (1 &lt;&lt; 12)</code></pre>
+            <p>The source occupies bits 0 through 5, and the target occupies bits 6 through 11. Bit 12 is therefore the next available bit.</p>
+            <p>If the engine's move contains a promotion, we set that bit:</p>
+            <pre><code>1 &lt;&lt; 12 = 4096</code></pre>
+            <p>For a promotion move, the same source and target encoding is used, with bit 12 set to <code>1</code> to indicate promotion to a queen.</p>
+            <p>For simplicity, our engine always promotes to a queen, so we only need to detect that the move is a promotion and set bit 12 accordingly. The PlayOK client will later place this encoded move into the appropriate WebSocket message.</p>
+            <h3>The Complete Conversion</h3>
+            <p>We can now understand the entire <code>search()</code> method as a sequence of simple transformations:</p>
+            <ol>
+                <li>Ask the UCI engine for a move.</li>
+                <li>Get the source square from the python-chess move.</li>
+                <li>Get the target square from the python-chess move.</li>
+                <li>Flip the square numbering with <code>^ 56</code>.</li>
+                <li>Store the source in the lower six bits.</li>
+                <li>Shift the target six bits to the left.</li>
+                <li>Combine source and target with bitwise OR.</li>
+                <li>Set bit 12 when the move is a promotion.</li>
+                <li>Return the resulting integer.</li>
+            </ol>
+            <p>The important thing is that the engine does not need to know anything about PlayOK. It returns a normal chess move. The Python bridge performs the protocol-specific conversion afterward.</p>
+            <h3>From Engine Move to PlayOK Message</h3>
+            <p>Once <code>search()</code> returns the encoded integer, the PlayOK module can place it into the WebSocket message expected by the server.</p>
+            <p>The relevant structure is:</p>
+            <pre><code>{"i": [LOAD_MOVE, self.active_table, 1, move, 1]}</code></pre>
+            <p>Here <code>LOAD_MOVE</code> identifies the type of operation, <code>self.active_table</code> identifies the current game table, and <code>move</code> contains the packed source and target information generated by our engine module.</p>
+            <p>This gives us the complete bridge:</p>
+            <pre><code>UCI engine
+    ↓
+e2e4
+    ↓
+python-chess Move
+    ↓
+e2 = 12, e4 = 28
+    ↓
+XOR 56
+    ↓
+source = 52, target = 36
+    ↓
+source | (target &lt;&lt; 6)
+    ↓
+2356
+    ↓
+{"i": [LOAD_MOVE, table, 1, 2356, 1]}
+    ↓
+PlayOK</code></pre>
+            <p>This is one of the most important pieces of reverse engineering in the entire project. We have taken a normal chess move produced by an existing UCI engine and transformed it into the compact binary-style representation used inside PlayOK's application protocol.</p>
+            <div class="note">
+                <div class="note-title">Translate at the Boundary</div>
+                <p>We do not want PlayOK-specific square encoding scattered throughout the chess code. The conversion happens at the boundary between the UCI engine and the PlayOK client. This keeps normal chess operations expressed in standard python-chess terms until the moment a move has to leave the engine.</p>
+            </div>
+            <h3>Closing the Engine</h3>
+            <p>When the bot shuts down, we also need to terminate the external engine process.</p>
+            <pre><code>def close(self):
+    if self.engine is not None:
+        self.engine.quit()
+        self.engine = None</code></pre>
+            <p>The <code>quit()</code> method tells python-chess to terminate communication with the UCI engine and shut down the engine process. Setting <code>self.engine</code> to <code>None</code> makes the object's state explicit and prevents us from accidentally trying to use an engine that has already been closed.</p>
+            <p>This may seem like a small detail, but properly managing an external process is important for a long-running bot. We do not want every test run to leave another chess engine process running in the background.</p>
+            <h3>The Role of engine.py</h3>
+            <p>At this point, the purpose of <code>engine.py</code> should be clear. It is not another chess engine. It is an adapter between an existing UCI chess engine and our PlayOK client.</p>
+            <p>The UCI engine operates in the language of chess software: positions and UCI moves. PlayOK operates in the language of its WebSocket protocol: tables, commands, and compact encoded move integers.</p>
+            <p><code>engine.py</code> sits between those two worlds. It maintains the chess position, sends the position to the engine, receives the engine's move, converts the move's square numbering, packs the source and target into the PlayOK integer format, and returns that value to the PlayOK client.</p>
+            <p>Once this conversion is understood, the seemingly mysterious number inside a PlayOK WebSocket message is no longer mysterious. It is simply two six-bit square indexes packed into an integer, with the square indexes transformed by flipping the board's rank numbering. That understanding will allow us to build the PlayOK client around the engine rather than trying to make the engine itself understand the PlayOK protocol.</p>
+            <div class="note">
+                <div class="note-title">Keep the Engine Independent</div>
+                <p>The chess engine should know how to play chess, not how PlayOK works. Our Python engine wrapper is the adapter between those worlds: it maintains the chess position, communicates with the UCI engine, and converts the resulting move into the representation required by PlayOK.</p>
+            </div>
+            <nav class="chapter-nav-bottom">
+                <a href="config.html">← Previous</a>
+                <a href="connect.html" class="next">Next →</a>
+            </nav>
+        </article>
+    </main>
+</body>
+</html>

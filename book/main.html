@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Main Driver — PCB</title>
+    <link rel="stylesheet" href="../style/style.css">
+</head>
+<body>
+    <main class="book">
+        <article class="chapter">
+            <nav class="chapter-nav">
+                <a href="../index.html">← Contents</a>
+            </nav>
+            <div class="chapter-label">Chapter 8</div>
+            <h2>The Main Driver</h2>
+            <p class="lead">At this point, the individual pieces of the bot are in place. We have configuration, a UCI engine, a PlayOK WebSocket client, a receive loop, and methods for sending moves and commands. We still need something to bring all of those pieces together. That is the job of <code>main.py</code>.</p>
+            <h3>The Main Program</h3>
+            <p>The main driver is intentionally small. It creates the PlayOK client, connects to the server, and then waits for commands from the console while the background WebSocket threads handle the actual PlayOK session.</p>
+            <pre><code># Packages
+from playok import PlayOK
+import json
+from config import *
+
+# Connect to PlayOK
+playok = PlayOK()
+playok.connect()</code></pre>
+            <p>There is not much code here because most of the complexity has already been moved into the appropriate modules. <code>main.py</code> is not responsible for understanding the WebSocket protocol or playing chess. It simply controls the lifetime of the application.</p>
+            <div class="note">
+                <div class="note-title">Keep the Driver Small</div>
+                <p>The main driver should coordinate the application rather than contain its internal logic. If <code>main.py</code> starts becoming responsible for WebSocket messages, chess calculations, or PlayOK state, that is usually a sign that some responsibility belongs in another module.</p>
+            </div>
+            <h3>Creating the PlayOK Client</h3>
+            <p>The first line creates our client object:</p>
+            <pre><code>playok = PlayOK()</code></pre>
+            <p>The constructor initializes the WebSocket state, PlayOK state, and chess engine that we built in the previous chapters.</p>
+            <p>We then establish the connection:</p>
+            <pre><code>playok.connect()</code></pre>
+            <p>Once <code>connect()</code> succeeds, the PlayOK object starts its background threads. One thread keeps the connection alive and periodically requests user state. The other continuously receives and processes messages from PlayOK.</p>
+            <p>This means the main thread does not need to sit there waiting for WebSocket messages. That work is already happening independently.</p>
+            <h3>The Main Loop</h3>
+            <p>After connecting, the main program enters a simple loop:</p>
+            <pre><code>while playok.running:
+    message = input()</code></pre>
+            <p>The condition is tied directly to the client's <code>running</code> state. As long as the PlayOK session is active, the console remains available for commands.</p>
+            <p>This gives us three separate execution paths:</p>
+            <pre><code>                 main.py
+                    │
+                    ▼
+             console input
+                    │
+          ┌─────────┴─────────┐
+          ▼                   ▼
+     user commands       PlayOK client
+                              │
+                    ┌─────────┴─────────┐
+                    ▼                   ▼
+              keep-alive            receive
+                 thread              thread</code></pre>
+            <p>The main thread handles human interaction while the background threads handle the live PlayOK session.</p>
+            <h3>Why Use Console Commands?</h3>
+            <p>The console is not meant to be a replacement for the PlayOK interface. It is simply a convenient control panel while we are developing and testing the bot.</p>
+            <p>Because the browser interface has been replaced by our own Python client, we need some way to inspect what the client believes is happening. A few simple commands give us exactly that without having to build another graphical interface.</p>
+            <h3>Quitting the Session</h3>
+            <p>The first command we handle is <code>quit</code>.</p>
+            <pre><code>if message.lower() == "quit":
+    playok.close()
+    continue</code></pre>
+            <p>The important detail here is that we do not simply break out of the loop. We call <code>playok.close()</code> so that the client can shut down its resources properly.</p>
+            <p>The <code>close()</code> method stops the running state, closes the WebSocket, and terminates the chess engine. Once <code>running</code> becomes false, the main loop naturally terminates.</p>
+            <pre><code>running = True
+    │
+    ▼
+while running
+    │
+    ├── user commands
+    ├── WebSocket receive
+    └── keep-alive
+    │
+    ▼
+close()
+    │
+    ▼
+running = False
+    │
+    ▼
+main loop exits</code></pre>
+            <p>This gives the application one central lifecycle flag that all of its threads can observe.</p>
+            <h3>Resigning a Game</h3>
+            <p>The next command is <code>resign</code>:</p>
+            <pre><code>elif message == "resign":
+    playok.send_command(message, playok.active_table)
+    continue</code></pre>
+            <p>This is a nice example of why we created <code>send_command()</code> in the previous chapter. The main driver does not need to know the numeric PlayOK command for resignation or the parameters it requires.</p>
+            <p>It simply passes the human-readable action and the current table:</p>
+            <pre><code>playok.send_command("resign", playok.active_table)</code></pre>
+            <p>The PlayOK client takes care of converting that into the correct WebSocket message and then requesting the latest user state.</p>
+            <div class="note">
+                <div class="note-title">Use the Same Interface Everywhere</div>
+                <p>The console should use the same command methods as the automated parts of the client. Whether a command originates from the human at the keyboard or from the receive loop, the PlayOK protocol should still be handled in one place.</p>
+            </div>
+            <h3>Inspecting the Session</h3>
+            <p>The <code>info</code> command gives us a snapshot of the internal PlayOK state:</p>
+            <pre><code>elif message == "info":
+    print("running:", playok.running)
+    print("active table:", playok.active_table)
+    print("player white:", playok.player_white)
+    print("player black:", playok.player_black)
+    print("active game:", "Idle" if playok.active_game == NONE else "Play")
+    print("engine side:", "None" if playok.engine_side == NONE else "White" if playok.engine_side == WHITE else "Black")
+    print("first move:", "No" if playok.first_move == NONE else "Played")
+    continue</code></pre>
+            <p>This command is particularly useful while reverse engineering because the server's messages are being translated into our own state variables. We can therefore compare what PlayOK is sending with what our client thinks those messages mean.</p>
+            <p>The information displayed includes:</p>
+            <ul>
+                <li>whether the client is running;</li>
+                <li>the current active table;</li>
+                <li>the White player;</li>
+                <li>the Black player;</li>
+                <li>whether a game is idle or playing;</li>
+                <li>which side belongs to the engine;</li>
+                <li>whether the first engine move has already been handled.</li>
+            </ul>
+            <p>These values represent the internal state we built throughout the previous chapters.</p>
+            <h3>Inspecting the Chess Board</h3>
+            <p>The <code>board</code> command gives us another useful debugging tool:</p>
+            <pre><code>elif message == "board":
+    print(playok.engine.board)
+    continue</code></pre>
+            <p>This prints the current <code>python-chess</code> board maintained by our engine wrapper.</p>
+            <p>This is extremely useful when debugging synchronization. We can watch the moves arriving from PlayOK and then inspect the local board to verify that our engine has reconstructed the same position.</p>
+            <pre><code>PlayOK game
+     │
+     │ opponent move
+     ▼
+receive_messages()
+     │
+     ▼
+engine.load_move()
+     │
+     ▼
+python-chess board
+     │
+     ▼
+board command
+     │
+     ▼
+  console</code></pre>
+            <p>If the printed position is wrong, we know that the problem is somewhere in the path between the PlayOK move message and <code>engine.load_move()</code>. This is much easier to debug than trying to reason about the entire application at once.</p>
+            <h3>The Main Driver Is Mostly Glue</h3>
+            <p>Notice what <code>main.py</code> does not contain.</p>
+            <p>It does not parse incoming WebSocket messages. It does not determine which tables are available. It does not decode PlayOK move integers. It does not maintain the chess board. It does not communicate with the UCI engine directly.</p>
+            <p>All of those responsibilities already belong to the modules we created earlier.</p>
+            <pre><code>config.py
+    │
+    └── constants and configuration
+
+engine.py
+    │
+    └── chess board and UCI engine
+
+playok.py
+    │
+    ├── WebSocket
+    ├── PlayOK state
+    ├── receive loop
+    ├── commands
+    └── engine integration
+
+main.py
+    │
+    └── application control and console</code></pre>
+            <p>This is exactly what we want. The main driver is the glue connecting the components, not another place where protocol logic accumulates.</p>
+            <h3>Human Control and Automation Can Coexist</h3>
+            <p>There is also something useful about this design from a debugging perspective. The bot is already automated, but we retain a small amount of manual control.</p>
+            <p>The background threads can automatically join a table, start a game, receive moves, search with the engine, and send responses. At the same time, we can type <code>info</code> or <code>board</code> into the console and inspect what the bot is doing.</p>
+            <p>This gives us a practical development loop:</p>
+            <pre><code>Bot runs
+   │
+   ▼
+PlayOK sends events
+   │
+   ▼
+Bot updates state
+   │
+   ├── automatic actions
+   │
+   └── manual inspection
+          │
+          ├── info
+          └── board</code></pre>
+            <p>During development, this is much more useful than immediately building a completely unattended program with no visibility into its internal state.</p>
+            <h3>Why the Console Is Enough</h3>
+            <p>For this project we do not need a graphical interface. PlayOK already provides the visual chess interface for human users, but our Python program only needs to communicate with the server.</p>
+            <p>The console therefore becomes a lightweight control surface for the client. The actual chess-playing logic happens in the background.</p>
+            <p>This is also consistent with the goal of the project. We are not trying to recreate PlayOK's entire browser interface. We are extracting the protocol behavior necessary to connect our own chess engine to it.</p>
+            <h3>The Complete Application</h3>
+            <p>With <code>main.py</code> added, the architecture of the project is now complete:</p>
+            <pre><code>                         main.py
+                            │
+                     console commands
+                            │
+                            ▼
+                       playok.py
+                  ┌─────────┼─────────┐
+                  │         │         │
+                  ▼         ▼         ▼
+              WebSocket  PlayOK    ChessEngine
+                  │       state         │
+                  │                     ▼
+                  │                  engine.py
+                  │                     │
+                  │                     ▼
+                  │                  ABC / UCI
+                  │
+                  ▼
+               PlayOK</code></pre>
+            <p>The direction of information is now clear.</p>
+            <p>PlayOK sends events into <code>playok.py</code>. The PlayOK client interprets those events and updates its state. When the opponent moves, the engine receives the updated position and searches for a response. The resulting move is converted into PlayOK's representation and sent back through the same WebSocket.</p>
+            <p>Meanwhile, <code>main.py</code> remains available for manual inspection and control.</p>
+            <h3>From Browser Behavior to Our Own Program</h3>
+            <p>When we started this project, PlayOK's WebSocket traffic was just a stream of JSON messages containing numbers and strings. We did not have an API designed for our engine. We had to discover what the browser was doing and determine which parts were actually necessary.</p>
+            <p>Now we have replaced the relevant browser behavior with our own program:</p>
+            <pre><code>Browser behavior
+       │
+       │ reverse engineer
+       ▼
+PlayOK protocol
+       │
+       │ implement
+       ▼
+Python client
+       │
+       ├── receive events
+       ├── maintain state
+       ├── send commands
+       └── send chess moves
+       │
+       ▼
+UCI engine ABC</code></pre>
+            <p>The browser is no longer required for the chess-playing logic. Our Python program has become the client.</p>
+            <div class="note">
+                <div class="note-title">The Browser Was Our Specification</div>
+                <p>We did not receive a formal PlayOK protocol specification. The browser itself became our specification. By observing what it sent and how it reacted to server messages, we reconstructed the subset of the protocol required by our bot.</p>
+            </div>
+            <h3>One More Look at the Driver</h3>
+            <p>The final driver remains remarkably small:</p>
+            <pre><code>from playok import PlayOK
+import json
+from config import *
+
+playok = PlayOK()
+playok.connect()
+
+while playok.running:
+    message = input()
+
+    if message.lower() == "quit":
+        playok.close()
+        continue
+
+    elif message == "resign":
+        playok.send_command(message, playok.active_table)
+        continue
+
+    elif message == "info":
+        print("running:", playok.running)
+        print("active table:", playok.active_table)
+        print("player white:", playok.player_white)
+        print("player black:", playok.player_black)
+        print("active game:", "Idle" if playok.active_game == NONE else "Play")
+        print("engine side:", "None" if playok.engine_side == NONE else "White" if playok.engine_side == WHITE else "Black")
+        print("first move:", "No" if playok.first_move == NONE else "Played")
+        continue
+
+    elif message == "board":
+        print(playok.engine.board)
+        continue</code></pre>
+            <p>That small amount of code starts an application containing a WebSocket client, a chess engine, a protocol implementation, background threads, state tracking, and an automated game-playing loop.</p>
+            <p>Most importantly, the complexity is no longer concentrated in one giant script. We have separated the responsibilities so that each part can be understood independently.</p>
+            <h3>What We Have Built</h3>
+            <p>At this point, the complete bridge exists:</p>
+            <ul>
+                <li><code>config.py</code> contains the protocol constants and configuration.</li>
+                <li><code>engine.py</code> connects the UCI engine to a local chess board and converts its moves into PlayOK's move representation.</li>
+                <li><code>playok.py</code> manages the WebSocket, interprets incoming messages, maintains PlayOK state, and sends commands and moves.</li>
+                <li><code>main.py</code> starts the session and provides a small console interface for controlling and inspecting the bot.</li>
+            </ul>
+            <p>The final result is not a browser automation script. It is a custom client that communicates directly with the server using the protocol we reverse engineered from the browser.</p>
+            <p>That is the real goal of this project: not to imitate clicks, but to understand what the browser is communicating and reproduce the useful parts ourselves.</p>
+            <nav class="chapter-nav-bottom">
+                <a href="commands.html">← Previous</a>
+                <a href="test.html" class="next">Next →</a>
+            </nav>
+        </article>
+    </main>
+</body>
+</html>

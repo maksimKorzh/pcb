@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Receiving Messages — PCB</title>
+    <link rel="stylesheet" href="../style/style.css">
+</head>
+<body>
+    <main class="book">
+        <article class="chapter">
+            <nav class="chapter-nav">
+                <a href="../index.html">← Contents</a>
+            </nav>
+            <div class="chapter-label">Chapter 6</div>
+            <h2>Receiving Messages</h2>
+            <p class="lead">In the previous chapter we connected to PlayOK and started two background threads. One thread keeps the connection alive. The other one is responsible for receiving everything PlayOK sends back to us. This chapter is where the WebSocket stream starts turning into an actual chess bot.</p>
+            <h3>Listening to the WebSocket</h3>
+            <p>The receive loop is deliberately simple. As long as the client is running, we wait for the next WebSocket message, decode it from JSON, and then determine what PlayOK is telling us.</p>
+            <pre><code>def receive_messages(self):
+    while self.running:
+        try:
+            message = self.ws.recv()
+            if not message: continue
+            response = json.loads(message)</code></pre>
+            <p><code>recv()</code> blocks until PlayOK sends something. This is exactly what we want here. We do not need to continuously poll the socket. The WebSocket connection itself tells us when new data arrives.</p>
+            <p>After receiving the message, <code>json.loads()</code> converts the JSON text into a Python dictionary. From this point forward, we work with the decoded <code>response</code> instead of the raw WebSocket text.</p>
+            <p>The most important part of the protocol is the <code>i</code> array. Its first element identifies the type of message or command. The remaining elements contain parameters specific to that message. The optional <code>s</code> array contains strings associated with the message.</p>
+            <pre><code>{
+    "i": [91, 301, ...],
+    "s": ["g3", "e5", "d4", ...]
+}</code></pre>
+            <p>For our client, this means that most of the receive loop follows the same basic pattern:</p>
+            <pre><code>if response["i"][0] == SOME_COMMAND:
+    # process the message</code></pre>
+            <p>We already discovered these command numbers while inspecting the browser traffic. The constants in <code>config.py</code> allow us to read <code>LOGIN_INFO</code>, <code>ACTIVE_CHALLENGES</code>, <code>LOAD_MOVE</code>, and so on instead of scattering unexplained numbers throughout the program.</p>
+            <h3>Identifying the Logged-In User</h3>
+            <p>The first useful response we process is the login information. PlayOK sends a message identified by <code>LOGIN_INFO</code> that contains our username.</p>
+            <pre><code>if response["i"][0] == LOGIN_INFO:
+    if self.user_name == "":
+        self.user_name = response["s"][0]
+        print(f"PLAYOK: Logged in as \"{self.user_name}\"")</code></pre>
+            <p>We only save the username once. This gives the rest of the program a reliable way to determine whether one of the players at a table is our engine.</p>
+            <p>This becomes important later because PlayOK tells us the names of the white and black players, rather than explicitly telling our client which side belongs to us.</p>
+            <h3>Discovering the Table Range</h3>
+            <p>PlayOK does not give us a simple list called “all chess tables”. Instead, table-related messages contain table numbers. When the first <code>ACTIVE_CHALLENGES</code> message arrives, we use its table number to determine the range of tables belonging to the current room.</p>
+            <pre><code>if response["i"][0] == ACTIVE_CHALLENGES:
+    table = response["i"][1]
+    if self.table_range == (0, 0):
+        first_table = [c for c in str(table)]
+        first_table[NONE] = "0"
+        first_table[-2] = "0"
+        first_table = int("".join(first_table))
+        last_table = first_table + 99
+        self.table_range = (first_table, last_table)
+        print(f"PLAYOK: Table range {self.table_range}")</code></pre>
+            <p>The important idea is not the particular arithmetic used to construct the range. We are learning something about PlayOK's table numbering from the traffic itself and storing that information so later messages can be filtered.</p>
+            <p>Once <code>table_range</code> has been initialized, the client can ignore table messages that do not belong to the group of tables we are interested in.</p>
+            <h3>Tracking Our Current Table</h3>
+            <p>The next piece of state is the table where our user currently sits.</p>
+            <pre><code>if response["i"][0] == USER_INFO:
+    if response["i"][2] == 0: self.reset_state()
+    else: self.active_table = response["i"][2]</code></pre>
+            <p>This is one of the reasons we periodically call <code>user_status()</code> from the keep-alive thread. The purpose is to force PlayOK to report the table and game state associated with our user.</p>
+            <p>If the response says that the table number is <code>0</code>, we are no longer sitting at a table, so <code>reset_state()</code> clears the state we previously stored.</p>
+            <p>Otherwise, we record the current table in <code>active_table</code>. This gives the receive loop a way to distinguish between a table we are interested in and every other table message arriving through the same WebSocket connection.</p>
+            <h3>Entering the Table Room</h3>
+            <p>After discovering the table range, we only process table-specific messages when the message refers to a table inside that range.</p>
+            <pre><code>if self.table_range[0]:
+    try:
+        if response["i"][1] in range(self.table_range[0], self.table_range[1]):
+            table = response["i"][1]
+            # process table message
+    except: pass</code></pre>
+            <p>The nested <code>try</code> is intentional. Not every WebSocket message has the same structure. Some messages do not have a second element in <code>i</code>, while others may have a different shape. We do not want one unexpected packet to terminate the receive thread.</p>
+            <p>Once we have identified a table message, the next decision is whether we are currently sitting at that table.</p>
+            <pre><code>if not self.active_table:
+    # We are looking at lobby activity.
+else:
+    # We are already sitting at a table.</code></pre>
+            <p>This gives the receive loop two different modes: <strong>lobby mode</strong> and <strong>active-table mode</strong>.</p>
+            <h3>Watching the Lobby</h3>
+            <p>When we are not currently sitting at a table, <code>ACTIVE_CHALLENGES</code> messages allow us to see games and available tables.</p>
+            <pre><code>if not self.active_table:
+    if response["i"][0] == ACTIVE_CHALLENGES:
+        print(f"LOBBY: Game ({response["s"][1]}) vs ({response["s"][2]}) at #{table}")
+
+        if response["i"][3] == 0 and response["i"][4] == 0:
+            self.send_command("join", table)
+            if random.choice([WHITE, BLACK]) == WHITE:
+                self.send_command("white_on", table)
+            else:
+                self.send_command("black_on", table)
+            continue</code></pre>
+            <p>The message contains enough information for us to display the players at a table. More importantly, the values in <code>response["i"]</code> allow us to recognize an empty table.</p>
+            <p>When we find an empty table, the bot joins it and randomly chooses whether to take White or Black. The important detail here is that we are not querying some separate PlayOK API for a list of available games. We are simply observing the same messages that the browser receives and reacting to them.</p>
+            <h3>Processing Our Active Table</h3>
+            <p>Once <code>active_table</code> is set, the receive loop changes from watching the lobby to managing the game at that table.</p>
+            <pre><code>elif table == self.active_table:
+    # Process messages for our table</code></pre>
+            <p>Several different message types can now arrive. They describe different parts of the table's state: who is playing, whether a game is running, the current board position, individual moves, and chat notifications.</p>
+            <h3>Determining the Players and Engine Side</h3>
+            <p>When we receive an <code>ACTIVE_CHALLENGES</code> message for our table, we store the two player names.</p>
+            <pre><code>if response["i"][0] == ACTIVE_CHALLENGES:
+    self.player_white = response["s"][1]
+    self.player_black = response["s"][2]
+
+    if self.player_white == self.user_name:
+        self.engine_side = WHITE
+    elif self.player_black == self.user_name:
+        self.engine_side = BLACK</code></pre>
+            <p>This is where the username we captured earlier becomes useful. PlayOK gives us the names of the players, and we compare them with our own username to determine which side the engine is playing.</p>
+            <p>We store that information in <code>engine_side</code> using the constants from <code>config.py</code>. From this point forward, the bot can tell whether it is supposed to play White or Black.</p>
+            <h3>Tracking Whether a Game Is Running</h3>
+            <p>The <code>GAME_STATE</code> message tells us whether the table currently has an active game.</p>
+            <pre><code>elif response["i"][0] == GAME_STATE:
+    self.active_game = response["i"][3]</code></pre>
+            <p>We do not need to translate the entire server response into a complicated object. For this bot, one value is enough. We store the current game state in <code>active_game</code> and later convert it into the simpler <code>idle</code> or <code>play</code> status used by the rest of the receive loop.</p>
+            <pre><code>status = "idle" if self.active_game == NONE else "play"</code></pre>
+            <p>This is a useful pattern when reverse engineering a protocol: we do not necessarily need to understand every field. We only need to understand the fields required for the behavior we are implementing.</p>
+            <h3>Loading an Existing Game</h3>
+            <p>A particularly important message is <code>LOAD_GAME</code>. This message can contain the moves that have already been played in the game.</p>
+            <pre><code>elif response["i"][0] == LOAD_GAME:
+    self.engine.new_game()
+    try:
+        moves = response["s"]
+        for move in moves:
+            self.engine.load_move(move)
+    except:
+        pass</code></pre>
+            <p>Our UCI engine maintains its own chess board. PlayOK maintains another representation of the same game. These two states must remain synchronized.</p>
+            <p>When PlayOK gives us the existing move list, we reset the local board and replay the moves one by one using <code>load_move()</code>.</p>
+            <p>This is much safer than trying to reconstruct a position manually. The engine starts from the standard initial position and applies exactly the moves PlayOK reports.</p>
+            <h3>Receiving an Individual Move</h3>
+            <p>After the initial game state has been loaded, PlayOK sends individual moves as <code>LOAD_MOVE</code> messages.</p>
+            <pre><code>elif response["i"][0] == LOAD_MOVE:
+    try:
+        side = WHITE if self.engine.board.turn else BLACK
+        move = response["s"][0]
+        print(f"TABLE #{table}: {("white" if side else "black")} played {move}")
+        self.engine.load_move(move)
+        if side == self.engine_side ^ 1:
+            self.send_move()
+    except:
+        pass</code></pre>
+            <p>There are two separate operations here. First, we update our local chess board with the move received from PlayOK. Second, we determine whether that move was made by the opponent and, if so, ask our engine to respond.</p>
+            <p>The <code>side</code> variable is calculated before loading the move. <code>python-chess</code> tells us whose turn it currently is through <code>board.turn</code>. <code>True</code> means White and <code>False</code> means Black.</p>
+            <pre><code>side = WHITE if self.engine.board.turn else BLACK</code></pre>
+            <p>Therefore, if the board says it is White's turn before applying the move, the received move is a White move. If it says it is Black's turn, the received move is a Black move.</p>
+            <p>After determining the side, we pass the SAN move to <code>self.engine.load_move(move)</code>. This updates the local board and gives the UCI engine the new position when it searches for its next move.</p>
+            <h3>Detecting the Opponent's Move</h3>
+            <p>The final condition is one of the most important pieces of the whole bot:</p>
+            <pre><code>if side == self.engine_side ^ 1:
+    self.send_move()</code></pre>
+            <p>Our constants are <code>WHITE = 1</code> and <code>BLACK = 0</code>. The XOR operation <code>^ 1</code> flips the side:</p>
+            <pre><code>WHITE ^ 1 = BLACK
+BLACK ^ 1 = WHITE</code></pre>
+            <p>So <code>self.engine_side ^ 1</code> means “the side opposite the engine”. If the received move belongs to that side, it was the opponent's move and we should generate our response.</p>
+            <p>This is the bridge between the incoming WebSocket protocol and the chess engine. PlayOK tells us that a move happened; we update the board; then the engine generates the next move.</p>
+            <h3>Handling a Player Being Displaced</h3>
+            <p>There is another event that matters for keeping our internal state synchronized with PlayOK: being removed from a table.</p>
+            <pre><code>if response["i"][0] == GAME_CHAT:
+    if response["s"][0] == "+ you have been displaced by the table operator":
+        self.send_command("leave", table)
+        continue</code></pre>
+            <p>PlayOK reports this event through a chat-style message. We do not treat it as ordinary chat. The specific text is a server notification telling us that the table operator has displaced our user.</p>
+            <p>The bot responds by explicitly leaving the table. Combined with the periodic <code>USER_INFO</code> request from the keep-alive thread, this prevents the client's internal state from remaining stuck on a table that it no longer occupies.</p>
+            <h3>Starting a Game</h3>
+            <p>After processing the individual message, we determine whether the table is idle or currently playing.</p>
+            <pre><code>status = "idle" if self.active_game == NONE else "play"</code></pre>
+            <p>When the table is idle, we have a few possibilities. If we have already recorded a first move from an earlier game, we leave the table. If our engine has been assigned a side and both players are present, we send the <code>start</code> command. If nobody is sitting on either side, there is no reason for us to remain at the table, so we leave it.</p>
+            <pre><code>if status == "idle":
+    if self.first_move != NONE:
+        self.send_command("leave", table)
+        time.sleep(DELAY)
+    if self.engine_side != NONE:
+        if self.player_white != "" and self.player_black != "":
+            self.send_command("start", table)
+            time.sleep(DELAY)
+        elif self.player_white == "" and self.player_black == "":
+            self.send_command("leave", table)</code></pre>
+            <p>The small delays are important because we are interacting with a live server. We do not want to immediately send a sequence of dependent commands without giving the previous action time to be processed.</p>
+            <h3>Leaving Games That Do Not Involve the Engine</h3>
+            <p>Our bot is designed to play its own games. If a game starts at a table where neither player is our username, we leave it.</p>
+            <pre><code>elif status == "play" and self.player_white != self.user_name and self.player_black != self.user_name:
+    self.send_command("leave", table)
+    time.sleep(DELAY)</code></pre>
+            <p>This is another example of why maintaining state is more important than simply reacting to individual messages. A single <code>GAME_STATE</code> message does not tell us whether this is our game. We combine it with the player names stored from previous messages.</p>
+            <h3>Making the First Move</h3>
+            <p>When the engine is playing White, it has to move immediately after the game starts because White moves first.</p>
+            <pre><code>elif status == "play" and self.engine_side == WHITE and self.first_move == NONE:
+    self.send_move()
+    self.first_move = WHITE</code></pre>
+            <p>The <code>first_move</code> variable prevents us from sending the opening move repeatedly every time another status message arrives.</p>
+            <p>When the engine is Black, it cannot move immediately. It must wait for White's move.</p>
+            <pre><code>elif status == "play" and self.engine_side == BLACK and self.first_move == NONE:
+    self.first_move = WHITE</code></pre>
+            <p>This may look slightly unusual at first. We are not actually making a move here. We are simply recording that the game has passed the initial state and that the first move has not been sent by our engine.</p>
+            <div class="note">
+                <div class="note-title">We Do Not Need to Decode Everything</div>
+                <p>Reverse engineering does not require understanding every field in every message. We only need to understand the parts required for the behavior we are implementing. Unknown fields can remain unknown until we encounter a reason to investigate them.</p>
+            </div>
+            <h3>Why the Receive Loop Is the Core of the Bot</h3>
+            <p>At this point the receive loop is doing much more than reading WebSocket messages. It has become a small state machine.</p>
+            <pre><code>                 PlayOK WebSocket
+                       │
+                       ▼
+                 recv() message
+                       │
+                       ▼
+                   JSON decode
+                       │
+                       ▼
+                 response["i"][0]
+                       │
+      ┌────────────────┼────────────────┐
+      ▼                ▼                ▼
+   LOGIN            LOBBY             TABLE
+      │                │                │
+      ▼                ▼                ▼
+  username         join table       game state
+                                       │
+                     ┌─────────────────┼─────────────────┐
+                     ▼                 ▼                 ▼
+                 LOAD_GAME         LOAD_MOVE        GAME_CHAT
+                     │                 │                 │
+                     ▼                 ▼                 ▼
+                rebuild board      load move       handle event
+                                       │
+                                       ▼
+                                 opponent move?
+                                       │
+                                       ▼
+                                  send_move()</code></pre>
+            <p>The WebSocket itself is only the transport. The real work happens in this layer, where raw protocol messages are converted into meaningful application state and actions.</p>
+            <h3>One Message Can Change Several Things</h3>
+            <p>One detail worth emphasizing is that a single incoming message does not necessarily correspond to one isolated action.</p>
+            <p>For example, an <code>ACTIVE_CHALLENGES</code> message can tell us which players are at a table, whether the table is empty, and whether we should join it. A <code>LOAD_MOVE</code> message updates the chess board and can immediately trigger an engine search. A <code>USER_INFO</code> message can tell us that we have been removed from a table and therefore need to reset our state.</p>
+            <p>This is why reverse engineering a WebSocket protocol is different from simply finding an API endpoint. We are reconstructing a stream of state changes. The meaning of one message often depends on the state established by earlier messages.</p>
+            <h3>Defensive Error Handling</h3>
+            <p>You will notice several <code>try/except</code> blocks in this method. Some are intentionally broad because the WebSocket protocol contains many different message formats and we are dealing with a live connection.</p>
+            <p>The outer exception handler is different. If receiving from the WebSocket itself fails, we print the error, mark the client as no longer running, and terminate the receive loop.</p>
+            <pre><code>except Exception as e:
+    print("SYSTEM:", e)
+    self.running = False
+    break</code></pre>
+            <p>Without this, a broken connection could leave the rest of the program believing that the bot is still connected while the receive thread has already stopped.</p>
+            <h3>From Messages to Behavior</h3>
+            <p>The important transition in this chapter is that we have stopped thinking about WebSocket messages as isolated JSON objects.</p>
+            <p>We now interpret them as events:</p>
+            <ul>
+                <li>PlayOK tells us who we are.</li>
+                <li>PlayOK tells us which tables exist.</li>
+                <li>We find an empty table and join it.</li>
+                <li>We determine which side belongs to our engine.</li>
+                <li>We detect when the game starts.</li>
+                <li>We load the existing position.</li>
+                <li>We receive each new opponent move.</li>
+                <li>We update the local chess board.</li>
+                <li>We ask the engine for a response.</li>
+                <li>We send that response back to PlayOK.</li>
+            </ul>
+            <p>That last step is handled by <code>send_move()</code>, which is where the work from the previous engine chapter comes back into the picture. The engine knows chess and produces a move. The PlayOK client knows the WebSocket protocol and converts that move into the command the server expects.</p>
+            <h3>The Complete Flow</h3>
+            <p>Putting everything together, the bot now has a continuous cycle:</p>
+            <pre><code>Connect
+   │
+   ▼
+Receive PlayOK messages
+   │
+   ▼
+Identify message type
+│
+├── Login information
+│
+├── Lobby/table information
+│
+├── Game state
+│
+├── Existing game moves
+│
+└── New moves
+       │
+       ▼
+  Update engine board
+       │
+       ▼
+ Is it our turn?
+       │
+      Yes
+       │
+       ▼
+  Search for a move
+       │
+       ▼
+Convert to PlayOK format
+       │
+       ▼
+   Send to server
+       │
+       ▼
+  Wait for next event</code></pre>
+            <p>This is the first point where the project starts behaving like a real automated player rather than a WebSocket experiment. We have a connection, we understand incoming messages, we maintain game state, and we can react to an opponent's move.</p>
+            <p>There is still an important piece missing, however. The receive loop calls <code>send_move()</code>, but we have not yet looked at exactly how a chess move produced by the UCI engine becomes a PlayOK command. In the next chapter we will connect that final part of the bridge and send our engine's moves back through the WebSocket.</p>
+            <div class="note">
+                <div class="note-title">The Receive Loop Is a State Machine</div>
+                <p>The receive loop is not simply reading JSON. Each incoming message can change what the bot should do next. As messages arrive, we update our local state and use that state to decide whether to join a table, start a game, load moves, search for a response, or leave.</p>
+            </div>
+            <nav class="chapter-nav-bottom">
+                <a href="connect.html">← Previous</a>
+                <a href="commands.html" class="next">Next →</a>
+            </nav>
+        </article>
+    </main>
+</body>
+</html>

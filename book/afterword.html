@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Afterword — PCB</title>
+    <link rel="stylesheet" href="../style/style.css">
+</head>
+<body>
+    <main class="book">
+        <article class="chapter">
+            <nav class="chapter-nav">
+                <a href="../index.html">← Contents</a>
+            </nav>
+            <div class="chapter-label">Chapter 10</div>
+            <h2>Afterword</h2>
+            <p class="lead">At first glance, the project we built in this book can look surprisingly simple: connect to PlayOK, receive a chess move, ask an engine for a reply, and send that move back. But once we actually started building it, the number of different programming skills required became much more obvious.</p>
+            <p>The final bot may be relatively small. Getting from an unexplained WebSocket connection to a working automated chess player is not.</p>
+            <h3>One Small Project, Many Skills</h3>
+            <p>The first skill we needed was not programming at all. It was observation.</p>
+            <p>Before writing our own client, we had to watch what the browser was doing. We opened developer tools, inspected network traffic, filtered WebSocket connections, captured messages, and performed individual actions while comparing the resulting traffic.</p>
+            <p>That is a different way of thinking from simply following an API document. Instead of asking, "What does the documentation say?", we asked, "What does the application actually do?"</p>
+            <p>From there, the project quickly became a combination of many different areas of programming:</p>
+            <ul>
+                <li><strong>Browser developer tools</strong> — inspecting Network and WebSocket traffic.</li>
+                <li><strong>Reverse engineering</strong> — discovering undocumented application behavior from observations.</li>
+                <li><strong>WebSockets</strong> — understanding a persistent, bidirectional connection rather than traditional request/response HTTP traffic.</li>
+                <li><strong>JSON</strong> — parsing and constructing the application's message format.</li>
+                <li><strong>Protocol analysis</strong> — turning unexplained numeric codes into meaningful operations.</li>
+                <li><strong>Python</strong> — implementing the client and organizing the application into separate modules.</li>
+                <li><strong>Threading</strong> — handling incoming WebSocket messages and background keep-alive activity while the main program remains responsive.</li>
+                <li><strong>State management</strong> — tracking tables, players, games, sides, and the current chess position.</li>
+                <li><strong>Chess programming</strong> — maintaining a legal board position and interpreting SAN and UCI moves.</li>
+                <li><strong>UCI</strong> — communicating with an external chess engine through a standard engine interface.</li>
+                <li><strong>Bit manipulation</strong> — decoding and encoding PlayOK's compact chess move representation.</li>
+                <li><strong>Software architecture</strong> — separating configuration, engine integration, WebSocket communication, and application control.</li>
+                <li><strong>Debugging</strong> — using logs and real server behavior to locate problems that cannot be reproduced in isolation.</li>
+                <li><strong>Testing</strong> — taking the finished program into a real online environment and observing how it behaves over complete games.</li>
+            </ul>
+            <p>None of these subjects is particularly unusual by itself. What makes the project interesting is that they all have to work together.</p>
+            <div class="note">
+                <div class="note-title">Simple Goal, Complicated Path</div>
+                <p>Many programming projects look simple when described as a single sentence. The complexity often comes from the number of different systems that must cooperate to make that sentence true.</p>
+            </div>
+            <h3>Learning by Connecting Different Areas</h3>
+            <p>This is one of the reasons I like projects such as this one.</p>
+            <p>You cannot really learn the WebSocket client without touching networking. You cannot understand the chess messages without understanding chess notation. You cannot connect the chess engine without learning something about UCI. You cannot reproduce the browser behavior without reverse engineering. And you cannot keep everything manageable without learning how to structure the code.</p>
+            <p>Each subject becomes a reason to learn another subject.</p>
+            <p>For example, the line:</p>
+            <pre><code>move = source | (target &lt;&lt; 6)</code></pre>
+            <p>looks like a tiny piece of Python. But understanding why it works requires several ideas at once: square numbering, binary representation, bit shifting, bit fields, the PlayOK protocol, and the relationship between the server's representation and <code>python-chess</code>.</p>
+            <p>Likewise, this apparently simple call:</p>
+            <pre><code>self.ws.recv()</code></pre>
+            <p>opens the door to a much larger subject. We have to think about blocking I/O, background threads, asynchronous events, connection lifetime, server state, message ordering, and what happens when the connection or the remote application behaves differently from our expectations.</p>
+            <p>That is how programming knowledge grows in real projects. One problem leads naturally to another.</p>
+            <h3>Why Reverse Engineering Is Such a Useful Skill</h3>
+            <p>One of the most valuable lessons from this project is learning how to work when the documentation is incomplete.</p>
+            <p>In real software development, we often receive clean documentation and well-defined APIs. But not every system gives us that luxury. Sometimes the documentation is incomplete, outdated, unavailable, or simply not detailed enough for what we want to build.</p>
+            <p>In those situations, observation becomes a technical skill.</p>
+            <p>We learned to capture traffic, change one thing at a time, compare messages, identify constants, look for changing values, inspect the browser's JavaScript, and form hypotheses from repeated observations.</p>
+            <p>The important part is that we did not need to understand everything.</p>
+            <p>We only needed to understand enough of the protocol to reproduce the behavior required by our application.</p>
+            <div class="note">
+                <div class="note-title">You Do Not Need the Whole Protocol</div>
+                <p>When reverse engineering an application, resist the temptation to decode everything. Start with the smallest useful subset. Once that subset works, expand it only when the project requires something new.</p>
+            </div>
+            <h3>From Browser Behavior to Software Design</h3>
+            <p>Another interesting part of the project was the transition from reverse engineering into ordinary software engineering.</p>
+            <p>At the beginning, we were simply looking at messages:</p>
+            <pre><code>{"i":[72,575]}</code></pre>
+            <p>Eventually that became:</p>
+            <pre><code>self.send_command("join", table)</code></pre>
+            <p>We moved from thinking about raw protocol details to thinking about useful abstractions.</p>
+            <p>The same thing happened with chess moves. Instead of making the rest of the application care about PlayOK's packed integer format, the engine module handles the conversion at the boundary. The rest of the program can continue thinking in terms of chess moves and board positions.</p>
+            <p>This is an important software-engineering lesson hidden inside a reverse-engineering project: once you understand an external system, hide its complexity behind a clean interface.</p>
+            <h3>Testing Taught Us Something Different</h3>
+            <p>The final tests also showed why real-world testing matters.</p>
+            <p>Our bot played two complete games. The first opponent disconnected. The second opponent resigned. After the first game, the bot continued running and found another game instead of requiring a restart.</p>
+            <p>Those results tested much more than the chess engine.</p>
+            <p>They tested the WebSocket connection, the lobby logic, table selection, state tracking, game initialization, chess-board synchronization, engine communication, move encoding, message sending, and the transition from one game back to the lobby.</p>
+            <p>At the same time, the test exposed functionality that we had not implemented yet: the program did not clearly report why the games ended.</p>
+            <p>That is exactly what a good test should do. It should demonstrate what works and reveal what still needs work.</p>
+            <h3>The Project Is Bigger Than the Bot</h3>
+            <p>The finished bot is the visible result of this book, but the code itself is not the most important result.</p>
+            <p>The more useful result is the collection of skills required to build it.</p>
+            <p>If you learned how to inspect a WebSocket connection, that skill can be used on another application.</p>
+            <p>If you learned how to analyze an undocumented message format, that skill can be used on another protocol.</p>
+            <p>If you learned how to communicate with a UCI engine, you can connect a different chess application to an engine.</p>
+            <p>If you learned how to use threads to separate network activity from the main application, that knowledge applies far beyond chess.</p>
+            <p>If you learned how to convert an unexplained stream of numbers into a useful abstraction, you have learned one of the fundamental habits of practical programming.</p>
+            <p>The PlayOK bot is simply the project that gives us a reason to practice all of these skills together.</p>
+            <h3>A Free Book for Everyone</h3>
+            <p>I have decided to release this book for free because I want the knowledge and the project to be accessible to anyone who wants to learn from it.</p>
+            <p>You do not need to be a professional programmer to follow the project. You can start with the individual chapters that interest you and gradually connect the ideas together. If you are learning Python, you can study the code. If you are interested in networking, you can study the WebSocket protocol. If you are interested in chess programming, you can follow the UCI and <code>python-chess</code> integration. If you are interested in reverse engineering, you can repeat the traffic-analysis process yourself.</p>
+            <p>And you do not have to stop at this project.</p>
+            <p>Take the techniques, change the application, experiment with the protocol, build your own client, break the code, fix it, and see what you discover.</p>
+            <div class="note">
+                <div class="note-title">Follow the Project, Then Go Further</div>
+                <p>The best way to learn from a project like this is not simply to read the finished code. Run it, inspect it, change it, add features, and try to explain to yourself why every part works. Then build something different with the same ideas.</p>
+            </div>
+            <h3>Supporting the Work</h3>
+            <p>Although the book is free, creating and maintaining projects like this takes a considerable amount of time.</p>
+            <p>There is the research itself, experimentation with the software, writing and rewriting the explanations, preparing examples, testing the code, maintaining the project, and answering questions from people who are following along.</p>
+            <p>If this book has helped you learn something useful, and you would like to support the work, you can make a donation via PayPal:</p>
+            <p><strong>PayPal: <a href="mailto:maksymkorzh@gmail.com">maksymkorzh@gmail.com</a></strong></p>
+            <p>A donation is completely optional. The book remains free, and everyone is welcome to use the material and follow the projects regardless of whether they contribute financially.</p>
+            <p>If you do choose to donate, thank you. Your support helps make it possible to continue creating free programming books, experiments, tutorials, and open educational projects.</p>
+            <h3>Keep Building</h3>
+            <p>We started this book with a simple question: how can we make our chess engine play on an online chess server?</p>
+            <p>The answer turned out to involve much more than chess.</p>
+            <p>We learned how to watch a browser communicate with a server. We learned how to recognize a WebSocket protocol hidden behind a web application. We discovered how numeric protocol fields could be mapped to meaningful commands. We connected Python to an external chess engine. We translated between different coordinate systems. We worked with binary representations and bit fields. We managed state across asynchronous messages. We tested the complete system against real opponents.</p>
+            <p>And eventually, the bot played.</p>
+            <p>That is the part I want you to remember.</p>
+            <p>Programming becomes much more interesting when we stop treating technologies as isolated subjects and start combining them to build something that actually works.</p>
+            <p>A WebSocket is one subject. Python is another. Chess programming is another. Reverse engineering is another. Threading is another. Protocol analysis is another.</p>
+            <p>But when we put them together, they become a working system.</p>
+            <p>That is what this project was really about.</p>
+            <p>So take the code, follow the experiments, ask questions, break things, fix them, and build something of your own.</p>
+            <p>The next interesting project is always waiting to be reverse engineered.</p>
+            <nav class="chapter-nav-bottom">
+                <a href="test.html">← Previous</a>
+                <a href="../index.html" class="next">CONTENTS →</a>
+            </nav>
+        </article>
+    </main>
+</body>
+</html>

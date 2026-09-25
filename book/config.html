@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Configuration File — PCB</title>
+    <link rel="stylesheet" href="../style/style.css">
+</head>
+<body>
+    <main class="book">
+        <article class="chapter">
+            <nav class="chapter-nav">
+                <a href="../index.html">← Contents</a>
+            </nav>
+            <div class="chapter-label">Chapter 3</div>
+            <h2>Configuration File</h2>
+            <p class="lead">Now that we have the basic project structure, we can start filling in the individual files. The first one is <code>config.py</code>. It may look like a simple collection of constants, but it gives the rest of the application a single place to find connection settings, PlayOK protocol identifiers, and chess engine configuration.</p>
+            <p>Keeping these values in one file is especially useful in a reverse engineering project. As we discover more about the PlayOK protocol, we will constantly encounter numeric message identifiers, connection parameters, and other values that need meaningful names. Instead of scattering those values throughout the code, we can define them once in <code>config.py</code>.</p>
+            <h3>PlayOK Connection</h3>
+            <p>The first section contains the settings required to establish communication with PlayOK.</p>
+            <pre><code># PlayOK connection
+DELAY = 1
+WS_URL = "wss://x.playok.com:17003/ws/"
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36"
+KEEP_ALIVE = {"i": []}</code></pre>
+            <p><code>WS_URL</code> contains the WebSocket endpoint used by the PlayOK client. This is the address to which our Python program will establish its WebSocket connection.</p>
+            <p><code>USER_AGENT</code> identifies our client to the server. In this project we use a browser-like user-agent string because the original PlayOK client runs inside a web browser and sends browser information as part of its connection data.</p>
+            <p><code>DELAY</code> is a general timing value used by the client when it needs to pause between operations. Keeping it in the configuration file means that timing behavior can be adjusted without searching through the implementation for hard-coded values.</p>
+            <p><code>KEEP_ALIVE</code> contains the message used to keep the WebSocket connection alive. WebSocket itself provides the transport, but the PlayOK application has its own application-level keep-alive message. We will examine this behavior in more detail when we implement the WebSocket client.</p>
+            <h3>Chess Connection Information</h3>
+            <p>The next values describe the chess service and the credentials used when establishing the PlayOK session.</p>
+            <pre><code>CHESS = 1710
+nnk6619g = "+639191544908807788"
+CREDENTIALS = {
+    "i": [CHESS],
+    "s": [
+        nnk6619g,
+        "en",
+        "b",
+        "",
+        USER_AGENT,
+    ]
+}</code></pre>
+            <p><code>CHESS</code> is the PlayOK identifier associated with the chess service. We give the value a meaningful name so that the rest of the application does not need to use the raw numeric value directly.</p>
+            <p>The value stored in <code>nnk6619g</code> is connection information used by the PlayOK client. In a real project, credentials and session-specific information should be treated as sensitive configuration rather than hard-coded into source code. Here it is shown directly because we are studying and reproducing the protocol.</p>
+            <p><code>CREDENTIALS</code> combines these values into the initial structure expected by the PlayOK WebSocket protocol. The important point is that this structure is defined once in the configuration module and can then be used by the PlayOK client when the connection is established.</p>
+            <p>Notice that <code>CHESS</code> and <code>USER_AGENT</code> are referenced from the dictionary rather than repeating their values. This makes the configuration easier to maintain and reduces the chance of accidentally using inconsistent values in different parts of the application.</p>
+            <div class="note">
+                <div class="note-title">Turn Numbers Into Names</div>
+                <p>Reverse-engineered protocols are full of unexplained numbers. Giving those numbers descriptive names in the configuration file turns protocol details into readable code and, at the same time, makes the configuration file a compact record of what we have discovered.</p>
+            </div>
+            <h3>PlayOK Socket Opcodes</h3>
+            <p>The next section is particularly important for reverse engineering.</p>
+            <pre><code># PlayOK socket opcodes
+LOGIN_INFO = 18
+USER_INFO = 61
+ACTIVE_CHALLENGES = 70
+JOIN_TABLE = 72
+LEAVE_TABLE = 73
+GAME_CHAT = 81
+TAKE_SIDE = 83
+LEAVE_SIDE = 84
+START_GAME = 85
+GAME_STATE = 90
+LOAD_GAME = 91
+LOAD_MOVE = 92
+RESIGN_GAME = 93</code></pre>
+            <p>These constants give names to the numeric operation codes used by the PlayOK WebSocket protocol.</p>
+            <p>During reverse engineering, we will frequently encounter messages whose first array contains numbers. Without context, a value such as <code>92</code> tells us very little. Once we have identified its purpose, however, we can give it a name such as <code>LOAD_MOVE</code>.</p>
+            <p>This is more than a cosmetic improvement. As the client becomes more complex, human-readable names make the code much easier to understand. Instead of checking what a particular number means every time we encounter it, the name immediately tells us what kind of event or operation we are handling.</p>
+            <p>The constants also document our growing understanding of the protocol. At the beginning of the project, these values are simply numbers observed in WebSocket traffic. As we perform experiments and correlate messages with actions in the browser, we can gradually assign meaning to them.</p>
+            <p>Some of these operations relate to the user's session, some to tables, and others to the actual chess game. We will not try to implement all of them at once. We only need the subset required for our automated chess player.</p>
+            <div class="note">
+                <div class="note-title">Configuration as Documentation</div>
+                <p>The configuration file is not only a place to store constants. In a reverse-engineering project, it becomes part of our protocol documentation. Every command we identify and every value we give a meaningful name to makes the unknown protocol a little easier to understand.</p>
+            </div>
+            <h3>UCI Chess Engine</h3>
+            <p>The final section contains the configuration for the chess engine.</p>
+            <pre><code># UCI chess engine
+ENGINE_PATH = "../engine/abc.exe"
+SEARCH_TIME = 3
+WHITE = 1
+BLACK = 0
+NONE = -1</code></pre>
+            <p><code>ENGINE_PATH</code> specifies where the UCI engine executable can be found. Our PlayOK client does not implement chess search itself. Instead, it will communicate with the existing engine through the UCI protocol.</p>
+            <p><code>SEARCH_TIME</code> defines how long the engine should be given to search for a move. Keeping this value in the configuration file allows us to change the engine's thinking time without modifying the engine integration code.</p>
+            <p>The final three constants describe the sides used by our application. <code>WHITE</code> represents White, <code>BLACK</code> represents Black, and <code>NONE</code> represents a state where no side has been assigned.</p>
+            <nav class="chapter-nav-bottom">
+                <a href="project.html">← Previous</a>
+                <a href="engine.html" class="next">Next →</a>
+            </nav>
+        </article>
+    </main>
+</body>
+</html>

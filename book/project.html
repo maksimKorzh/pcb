@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Project Structure — PCB</title>
+    <link rel="stylesheet" href="../style/style.css">
+</head>
+<body>
+    <main class="book">
+        <article class="chapter">
+            <nav class="chapter-nav">
+                <a href="../index.html">← Contents</a>
+            </nav>
+            <div class="chapter-label">Chapter 2</div>
+            <h2>Project Structure</h2>
+            <p class="lead">Before we start reverse engineering individual WebSocket messages, it is useful to decide how the final program will be organized. The goal is not to reproduce the entire PlayOK website. We only need to build the small part of the browser client that is necessary for an external chess engine to play games through PlayOK.</p>
+            <p>The project will therefore be split into four main Python files. Each file has a specific responsibility, and keeping those responsibilities separate will make the reverse engineering process much easier to follow.</p>
+            <h3>The Four Parts</h3>
+            <p>At a high level, the application will look like this:</p>
+            <ul>
+                <li><code>config.py</code> — configuration, credentials, and human-readable WebSocket command constants.</li>
+                <li><code>engine.py</code> — communication with the UCI chess engine and conversion between UCI moves and PlayOK moves.</li>
+                <li><code>playok.py</code> — our simplified PlayOK WebSocket client.</li>
+                <li><code>main.py</code> — the console-based interface that controls the bot.</li>
+            </ul>
+            <p>The important idea is that these components communicate with each other rather than becoming one large program. The PlayOK client should not need to know how the chess engine searches for moves, and the chess engine interface should not need to know how PlayOK's WebSocket protocol works internally.</p>
+            <h4>config.py</h4>
+            <p>The <code>config.py</code> file will contain configuration that is shared by the rest of the application.</p>
+            <p>This includes the credentials required to connect as a PlayOK user, connection-related settings, and constants representing the different WebSocket commands and message types that we discover during the reverse engineering process.</p>
+            <p>One reason for keeping the WebSocket command constants here is readability. Reverse engineered protocols often contain messages identified by numbers. When we are looking through the code, a raw integer does not tell us much about its purpose. Giving these values human-readable names allows the rest of the program to describe what it is doing instead of forcing us to remember what every encoded value means.</p>
+            <p>The configuration file will therefore act as a central place for values that describe the environment and the protocol, while the actual behavior of the client will remain in the other modules.</p>
+            <h4>engine.py</h4>
+            <p>The <code>engine.py</code> file will be responsible for communicating with the UCI chess engine.</p>
+            <p>Our chess engine already understands chess and already knows how to calculate a move. What it does not understand is PlayOK. From the engine's point of view, it is simply communicating through the UCI protocol.</p>
+            <p>This module will provide the bridge between those two worlds. It will start and communicate with the UCI engine, maintain the chess position required by the engine, request moves, and receive the engine's responses.</p>
+            <p>It will also handle the conversion between the representation used by UCI and the representation expected by PlayOK. This separation is important because the two protocols have completely different purposes. UCI is designed for communication between chess software, while PlayOK's WebSocket protocol is designed for communication between the PlayOK browser client and its server.</p>
+            <p>The engine module therefore becomes the chess-specific side of our bridge. It knows about chess positions and UCI moves, but it does not need to know how a WebSocket connection is established or how PlayOK tables are managed.</p>
+            <h4>playok.py</h4>
+            <p>The <code>playok.py</code> file will contain our custom PlayOK client.</p>
+            <p>PlayOK already has a complete JavaScript client running inside the browser. That client handles many things that are useful to a human player: displaying the interface, managing menus, handling chat, updating controls, displaying tables, processing user interaction, and communicating with the PlayOK server.</p>
+            <p>We do not need to reproduce all of that.</p>
+            <p>Our client will be a much smaller implementation containing only the functionality required for the chess bot. Its job is to establish the WebSocket connection, authenticate or identify the user, understand the relevant server messages, detect games and challenges, join the appropriate game, receive opponent moves, and send our own moves.</p>
+            <p>In other words, we are building a minimal PlayOK client specifically for a chess engine. It will not have a graphical interface and it will not attempt to reproduce the entire PlayOK browser application. It only needs to reproduce the protocol behavior that matters to our bot.</p>
+            <p>This is an important principle in reverse engineering. We are not trying to clone the original application. We are trying to understand enough of its communication protocol to implement the subset of behavior that our own application requires.</p>
+            <h4>main.py</h4>
+            <p>The <code>main.py</code> file will be the entry point of the application.</p>
+            <p>It will provide a simple console-based interface through which we can control the bot and issue user-defined commands. The main program will connect the different components together without containing the implementation details of either the PlayOK protocol or the chess engine.</p>
+            <p>This gives us a clean separation between the interface and the underlying systems. The console can tell the PlayOK client what to do, while the PlayOK client can communicate with the engine when a chess move is required.</p>
+            <h3>Why Keep It Simple?</h3>
+            <p>There is a temptation when building a project like this to create a large framework around it. We could introduce many classes, abstractions, configuration systems, and helper modules before the bot even plays its first game.</p>
+            <p>That would work against the purpose of this project.</p>
+            <p>The interesting part of this book is understanding the protocol and building the bridge between PlayOK and the chess engine. The code should therefore remain as simple as possible while still keeping the major responsibilities separated.</p>
+            <p>As we reverse engineer more of the protocol, the individual files will naturally become more sophisticated. New message types will appear, more game states will need to be handled, and additional conversion logic will be required. Having a clear project structure from the beginning will allow that complexity to grow without turning the entire program into one large block of code.</p>
+            <p>By the end of the project, these four components will work together as a small custom client: <code>main.py</code> controls the application, <code>playok.py</code> communicates with PlayOK, <code>engine.py</code> communicates with the UCI engine, and <code>config.py</code> keeps the configuration and protocol definitions in one place.</p>
+            <div class="note">
+                <div class="note-title">Separate Responsibilities</div>
+                <p>Each module should have one clear responsibility. Configuration describes the protocol, the engine handles chess, the PlayOK client handles communication and server state, and the main program provides the user interface. Keeping these responsibilities separate makes the reverse-engineered code much easier to change later.</p>
+            </div>
+            <nav class="chapter-nav-bottom">
+                <a href="preface.html">← Previous</a>
+                <a href="config.html" class="next">Next →</a>
+            </nav>
+        </article>
+    </main>
+</body>
+</html>

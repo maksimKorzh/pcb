@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Moves & Commands — PCB</title>
+    <link rel="stylesheet" href="../style/style.css">
+</head>
+<body>
+    <main class="book">
+        <article class="chapter">
+            <nav class="chapter-nav">
+                <a href="../index.html">← Contents</a>
+            </nav>
+            <div class="chapter-label">Chapter 7</div>
+            <h2>Sending Moves and Commands</h2>
+            <p class="lead">In the previous chapter we built the receiving side of the bot. We can now listen to PlayOK, identify tables, track players, load positions, and detect when the opponent makes a move. The missing half is sending information back. In this chapter we build the small command layer that turns our engine's decisions and user actions into PlayOK WebSocket messages.</p>
+            <h3>Two Different Kinds of Outgoing Messages</h3>
+            <p>From PlayOK's point of view, there is not really a separate category called “chess moves”. A move is another variation of a PlayOK command, with additional parameters containing the encoded chess move.</p>
+            <p>Technically, both a table action such as joining a table and a chess move are the same kind of thing: an outgoing PlayOK action represented by an <code>i</code> array. The difference is that a move requires additional parameters describing the game and the encoded move itself.</p>
+            <p>For example, joining a table can be represented as:</p>
+            <pre><code>{"i": [JOIN_TABLE, table]}</code></pre>
+            <p>while sending a chess move uses the same basic command mechanism with additional parameters:</p>
+            <pre><code>{"i": [LOAD_MOVE, table, 1, move, 1]}</code></pre>
+            <p>So, technically, <code>send_move()</code> is simply a specialized PlayOK command. Mentally, however, I still separate the two in our Python code because it makes the rest of the application easier to understand. <code>send_command()</code> handles general table and game actions, while <code>send_move()</code> handles the special case of an engine-generated chess move.</p>
+            <p>This distinction is about keeping our code clean, not about claiming that PlayOK has two fundamentally different outgoing protocols. Underneath, they are all PlayOK actions sent through the same WebSocket.</p>
+            <pre><code>send_move()
+send_command(action, table)</code></pre>
+            <p><code>send_move()</code> is responsible only for chess moves. <code>send_command()</code> is responsible only for table and game actions.</p>
+            <h3>Sending an Engine Move</h3>
+            <p>The entire engine-move method is surprisingly small:</p>
+            <pre><code>def send_move(self):
+    move = self.engine.search()
+    self.send_message({"i": [LOAD_MOVE, self.active_table, 1, move, 1]})</code></pre>
+            <p>The important part is that the complexity has already been handled by the engine layer. <code>self.engine.search()</code> asks the UCI engine for its best move and converts that move into the integer representation we discovered earlier.</p>
+            <p>By the time <code>send_move()</code> receives the result, it does not need to know anything about UCI notation, python-chess square numbering, or the XOR transformation. The engine module has already converted the move into the PlayOK representation.</p>
+            <p>The only remaining job is to put that integer into the correct PlayOK message.</p>
+            <h3>The PlayOK Move Message</h3>
+            <p>The outgoing message has this structure:</p>
+            <pre><code>{
+    "i": [LOAD_MOVE, self.active_table, 1, move, 1]
+}</code></pre>
+            <p>The values have different roles. <code>LOAD_MOVE</code> identifies the PlayOK operation, <code>self.active_table</code> identifies the table, and <code>move</code> is the encoded chess move produced by our engine.</p>
+            <p>The remaining values are part of the message format required by PlayOK. We do not need to reinterpret them every time we send a move. We discovered the structure by observing what the browser sends, and our client reproduces that structure.</p>
+            <p>This is one of the main lessons of reverse engineering: once we understand a message format, we can hide its protocol-specific details behind a small function. The rest of the application can simply call <code>send_move()</code>.</p>
+            <h3>The Engine-to-Server Bridge</h3>
+            <p>It is useful to look at the complete path of a move:</p>
+            <pre><code>PlayOK
+   │
+   │ opponent move
+   ▼
+receive_messages()
+   │
+   ▼
+engine.load_move()
+   │
+   ▼
+engine.search()
+   │
+   ▼
+PlayOK move integer
+   │
+   ▼
+send_move()
+   │
+   ▼
+WebSocket
+   │
+   ▼
+PlayOK</code></pre>
+            <p>The UCI engine never needs to know that PlayOK exists. PlayOK never needs to know how the engine calculated its move. The bridge between them is responsible for translating between the two protocols.</p>
+            <h3>Commands Are Different from Moves</h3>
+            <p>Chess moves are only one part of the interaction. Our bot also needs to perform table actions.</p>
+            <p>During the receive loop we already used commands such as:</p>
+            <pre><code>self.send_command("join", table)
+self.send_command("leave", table)
+self.send_command("white_on", table)
+self.send_command("black_on", table)
+self.send_command("start", table)</code></pre>
+            <p>Instead of constructing a different JSON object every time we need one of these actions, we use a single method and give it a human-readable action name.</p>
+            <pre><code>def send_command(self, action, table):</code></pre>
+            <p>This is a small abstraction, but it makes a big difference to the rest of the code. The receive loop can describe what it wants to do rather than how PlayOK encodes that action.</p>
+            <h3>One Command Template</h3>
+            <p>We begin with an empty request:</p>
+            <pre><code>request = {"i": [], "s": []}</code></pre>
+            <p>The command method then fills in the <code>i</code> array according to the requested action. The <code>s</code> array remains empty for these commands.</p>
+            <p>Instead of duplicating WebSocket code for every action, we have one place where all of the PlayOK command encodings live.</p>
+            <h3>Joining a Table</h3>
+            <p>The first command is joining a table:</p>
+            <pre><code>if action == "join":
+    request["i"] = [JOIN_TABLE, table]</code></pre>
+            <p>The caller does not need to know the numeric value of <code>JOIN_TABLE</code>. That value is defined in <code>config.py</code>, where we keep the protocol constants.</p>
+            <p>So the application thinks in terms of:</p>
+            <pre><code>self.send_command("join", table)</code></pre>
+            <p>while the protocol layer produces the encoded message:</p>
+            <pre><code>{"i": [JOIN_TABLE, table], "s": []}</code></pre>
+            <p>This separation keeps the reverse-engineered protocol details out of the higher-level game logic.</p>
+            <h3>Leaving a Table</h3>
+            <p>Leaving works in exactly the same way:</p>
+            <pre><code>elif action == "leave":
+    request["i"] = [LEAVE_TABLE, table]</code></pre>
+            <p>Again, the receive loop only needs to say that it wants to leave. It does not need to construct the PlayOK packet itself.</p>
+            <h3>Taking a Side</h3>
+            <p>PlayOK uses another command for taking a seat on the board. White and Black are represented by different values.</p>
+            <pre><code>elif action == "white_on":
+    request["i"] = [TAKE_SIDE, table, 0]
+elif action == "black_on":
+    request["i"] = [TAKE_SIDE, table, 1]</code></pre>
+            <p>Although not being explicitly used, there are also corresponding commands for leaving a particular side in case if you need some debugging:</p>
+            <pre><code>elif action == "white_off":
+    request["i"] = [LEAVE_SIDE, table, 0]
+elif action == "black_off":
+    request["i"] = [LEAVE_SIDE, table, 1]</code></pre>
+            <p>The important point is that the human-readable action name contains the meaning while the numeric protocol representation stays inside <code>send_command()</code>.</p>
+            <h3>Starting and Resigning</h3>
+            <p>Starting a game is another simple table command:</p>
+            <pre><code>elif action == "start":
+    request["i"] = [START_GAME, table]</code></pre>
+            <p>Resigning requires additional parameters:</p>
+            <pre><code>elif action == "resign":
+    request["i"] = [RESIGN_GAME, table, 4, 0]</code></pre>
+            <p>This is a good example of why the command abstraction is useful. The rest of the program does not have to remember that resignation requires four values in the <code>i</code> array or what those values mean. It simply calls:</p>
+            <pre><code>self.send_command("resign", table)</code></pre>
+            <p>The protocol-specific structure stays in one place.</p>
+            <h3>Sending the Request</h3>
+            <p>Once the appropriate command has been selected, the request is passed to the common WebSocket sending method:</p>
+            <pre><code>self.send_message(request)</code></pre>
+            <p>This is another important separation in the design.</p>
+            <p><code>send_command()</code> knows how to construct a PlayOK command. <code>send_message()</code> knows how to actually serialize and transmit a message through the WebSocket.</p>
+            <pre><code>send_command()
+      │
+      ▼
+construct protocol message
+      │
+      ▼
+send_message()
+      │
+      ▼
+JSON serialization
+      │
+      ▼
+WebSocket.send()</code></pre>
+            <p>Neither method needs to know how the other layer works internally.</p>
+            <h3>The Interesting Part: Updating State Indirectly</h3>
+            <p>There is one particularly deliberate design decision at the end of <code>send_command()</code>:</p>
+            <pre><code>self.send_message(request)
+
+# Track state variables
+self.user_status()</code></pre>
+            <p>At first this may look unnecessary. We have just sent a command, so why immediately send another request?</p>
+            <p>The reason is that <code>send_command()</code> does not directly modify any of our table-state variables. Instead, after performing the action, it asks PlayOK to report the user's current table state. The response comes back through the normal receive loop and updates <code>active_table</code> there.</p>
+            <p>This gives us a very clean separation:</p>
+            <pre><code>send_command()
+    │
+    ├── send the requested action
+    │
+    └── request current user state
+                │
+                ▼
+         PlayOK response
+                │
+                ▼
+        receive_messages()
+                │
+                ▼
+          update state</code></pre>
+            <p>We deliberately do not do something like this inside <code>send_command()</code>:</p>
+            <pre><code>self.active_table = table</code></pre>
+            <p>That would make our local state an assumption about what happened on the server.</p>
+            <p>Instead, we let PlayOK tell us what the resulting state actually is. The command says what we want to do. The server response tells us what state we are actually in.</p>
+            <h3>Why This Keeps the Code Clean</h3>
+            <p>This distinction becomes especially useful when commands can fail or produce a state different from what we expected.</p>
+            <p>For example, suppose we send a command to join a table. Rather than immediately assuming that we are now sitting there, we wait for the server's response. The same mechanism works after leaving a table, joining a side, or performing another action that changes the user's table state.</p>
+            <p>Our receive loop therefore remains the single place responsible for interpreting PlayOK state.</p>
+            <pre><code>Commands
+   │
+   ▼
+What we ask PlayOK to do
+   │
+   ▼
+WebSocket
+   │
+   ▼
+What PlayOK says happened
+   │
+   ▼
+Receive loop
+   │
+   ▼
+Our actual state</code></pre>
+            <p>This is much cleaner than having different methods independently modify <code>active_table</code>, <code>player_white</code>, <code>player_black</code>, and other state variables.</p>
+            <h3>Commands Describe Actions, Not State</h3>
+            <p>This leads to a useful architectural rule for the whole client:</p>
+            <p><strong>Outgoing commands describe actions. Incoming messages establish state.</strong></p>
+            <p>When we call <code>send_command("join", table)</code>, we are saying, “ask PlayOK to join this table.” We are not saying, “the bot is now definitely on this table.”</p>
+            <p>When PlayOK later sends the user information response, <code>receive_messages()</code> interprets that response and updates <code>active_table</code>.</p>
+            <p>This distinction prevents the client from confusing an attempted action with the result of that action.</p>
+            <h3>Why <code>user_status()</code> Belongs Here</h3>
+            <p>Putting <code>user_status()</code> at the end of <code>send_command()</code> also means every command automatically refreshes our table state.</p>
+            <p>We do not need to remember to write this after every individual action:</p>
+            <pre><code>send_command("join", table)
+user_status()
+
+send_command("leave", table)
+user_status()
+
+send_command("start", table)
+user_status()</code></pre>
+            <p>Instead, the command method handles it consistently:</p>
+            <pre><code>send_command("join", table)</code></pre>
+            <p>Internally, that becomes:</p>
+            <pre><code>construct command
+        ↓
+send command
+        ↓
+request current user state</code></pre>
+            <p>This is exactly the kind of small abstraction that makes a reverse-engineered client manageable. Once we discover a protocol pattern that should happen every time, we encode that pattern in one function rather than relying on ourselves to remember it everywhere else.</p>
+            <h3>The Complete Command Layer</h3>
+            <p>The finished method is compact because all the protocol details have been concentrated into one place:</p>
+            <pre><code>def send_command(self, action, table):
+    request = {"i": [], "s": []}
+
+    if action == "join": request["i"] = [JOIN_TABLE, table]
+    elif action == "leave": request["i"] = [LEAVE_TABLE, table]
+    elif action == "white_on": request["i"] = [TAKE_SIDE, table, 0]
+    elif action == "white_off": request["i"] = [LEAVE_SIDE, table, 0]
+    elif action == "black_on": request["i"] = [TAKE_SIDE, table, 1]
+    elif action == "black_off": request["i"] = [LEAVE_SIDE, table, 1]
+    elif action == "start": request["i"] = [START_GAME, table]
+    elif action == "resign": request["i"] = [RESIGN_GAME, table, 4, 0]
+
+    self.send_message(request)
+    self.user_status()</code></pre>
+            <p>Notice how little WebSocket code exists here. There is no connection management, no JSON serialization, and no state interpretation. Those responsibilities belong to other methods.</p>
+            <h3>The Architecture So Far</h3>
+            <p>We now have three distinct layers working together:</p>
+            <pre><code>               PlayOK WebSocket
+                 ▲           │
+                 │           ▼
+          send_message()   recv()
+                 ▲           │
+                 │           ▼
+          ┌────────────┐  receive_messages()
+          │  Commands  │        │
+          │            │        ▼
+          │ send_move  │   PlayOK state
+          │send_command│        │
+          └──────┬─────┘        ▼
+                 │          ChessEngine
+                 │              │
+                 └──────────────┘</code></pre>
+            <p>The <code>ChessEngine</code> handles chess. The receive loop interprets server events and maintains state. The command methods translate our desired actions into PlayOK's protocol. Finally, <code>send_message()</code> provides the common transport layer.</p>
+            <h3>From UCI Move to PlayOK Move</h3>
+            <p>We can now follow an entire engine move from the moment the opponent moves:</p>
+            <ol>
+                <li>PlayOK sends a <code>LOAD_MOVE</code> message.</li>
+                <li><code>receive_messages()</code> receives it.</li>
+                <li>The SAN move is loaded into the local <code>python-chess</code> board.</li>
+                <li>The receive loop detects that the move belongs to the opponent.</li>
+                <li><code>send_move()</code> calls <code>self.engine.search()</code>.</li>
+                <li>The engine produces a move and the engine layer converts it to the PlayOK integer representation.</li>
+                <li><code>send_move()</code> places that integer into a <code>LOAD_MOVE</code> request.</li>
+                <li><code>send_message()</code> serializes the request and sends it through the WebSocket.</li>
+                <li>PlayOK receives the move and updates the game.</li>
+            </ol>
+            <p>That is the complete UCI-to-WebSocket bridge.</p>
+            <h3>The Important Design Principle</h3>
+            <p>At this point, the individual methods are small, but together they form a very deliberate architecture.</p>
+            <p>The engine does not know about WebSockets. The WebSocket transport does not know about chess. The command layer does not directly maintain server state. The receive loop does not construct every outgoing packet itself.</p>
+            <p>Each part has one job:</p>
+            <pre><code>ChessEngine
+    │
+    └── chess position and engine moves
+
+receive_messages()
+    │
+    └── interpret PlayOK events and update state
+
+send_move()
+    │
+    └── send an engine-generated chess move
+
+send_command()
+    │
+    └── translate user actions into PlayOK commands
+
+send_message()
+    │
+    └── serialize and transmit WebSocket messages</code></pre>
+            <p>This separation is especially valuable in a reverse-engineering project because our understanding of the protocol will continue to evolve. If we discover that a command uses a different field or parameter, we can change the command mapping without rewriting the rest of the bot.</p>
+            <h3>We Are No Longer Reproducing the Browser Blindly</h3>
+            <p>The goal of reverse engineering was never to copy the entire PlayOK browser client. The browser contains a huge amount of functionality that our engine does not need.</p>
+            <p>Instead, we observed what the browser does, identified the messages that matter to chess, and reproduced only the subset required by our bot.</p>
+            <p>Our client can now perform the essential actions:</p>
+            <ul>
+                <li>connect to PlayOK;</li>
+                <li>keep the connection alive;</li>
+                <li>discover tables;</li>
+                <li>join and leave tables;</li>
+                <li>take White or Black;</li>
+                <li>start a game;</li>
+                <li>receive the current position;</li>
+                <li>receive opponent moves;</li>
+                <li>generate engine moves;</li>
+                <li>send those moves back to PlayOK.</li>
+            </ul>
+            <p>That is enough to turn a UCI chess engine that knows nothing about PlayOK into an automated online player.</p>
+            <h3>The Protocol Is Now Becoming an API</h3>
+            <p>One of the most satisfying parts of this process is seeing the reverse-engineered protocol disappear behind our own interface.</p>
+            <p>At the beginning, we saw messages such as:</p>
+            <pre><code>{"i":[72,301],"s":[]}</code></pre>
+            <p>Without context, this is just a collection of numbers. After reverse engineering, the same message can be represented in our code as:</p>
+            <pre><code>self.send_command("join", table)</code></pre>
+            <p>Likewise, instead of thinking about the exact integer representation of a chess move every time we play, the rest of the application can simply call:</p>
+            <pre><code>self.send_move()</code></pre>
+            <p>This is the point where reverse engineering becomes software engineering. We have discovered the protocol, and now we are wrapping it in a clean interface that our own program can use.</p>
+            <div class="note">
+                <div class="note-title">Commands Describe Actions</div>
+                <p>Our command layer translates readable actions such as <code>join</code>, <code>leave</code>, and <code>start</code> into PlayOK's numeric protocol. The rest of the application does not need to know those numbers. This keeps the reverse-engineered protocol details in one place.</p>
+            </div>
+            <h3>Next Step</h3>
+            <p>We now have both directions of communication working conceptually: PlayOK can send events to our client, and our client can send commands and engine moves back.</p>
+            <p>The next step is to put everything together into the main application. We need a small console interface that starts the client, connects it to PlayOK, keeps the program running, and gives us a way to control the bot from the terminal.</p>
+            <p>Once that is in place, we will have the complete application: configuration, UCI engine, WebSocket connection, message processing, command handling, and the bridge that allows ABC to play chess through PlayOK.</p>
+            <nav class="chapter-nav-bottom">
+                <a href="receive.html">← Previous</a>
+                <a href="main.html" class="next">Next →</a>
+            </nav>
+        </article>
+    </main>
+</body>
+</html>

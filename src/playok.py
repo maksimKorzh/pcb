@@ -174,7 +174,7 @@ class PlayOK:
                                 # Load last move
                                 elif response["i"][0] == LOAD_MOVE:
                                     try:
-                                        side = 1 if self.engine.board.turn else 0
+                                        side = WHITE if self.engine.board.turn else BLACK
                                         move = response["s"][0]
                                         print(f"TABLE #{table}: {("white" if side else "black")} played {move}")
                                         self.engine.load_move(move)
