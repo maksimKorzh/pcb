@@ -1,6 +1,6 @@
 # PlayOK WebSocket Chess Bot
 
-A fully automated chess bot that connects [PlayOK](https://www.playok.com/) to a UCI chess engine through PlayOK's WebSocket protocol.
+A fully automated chess bot that connects a UCI chess engine to [PlayOK](https://www.playok.com/) through WebSocket protocol.
 
 The project was built by reverse engineering the communication between the PlayOK browser client and server, then reproducing the required behavior in Python.
 
@@ -30,7 +30,7 @@ The included example uses the **ABC chess engine**.
 
 The complete development process, reverse-engineering methodology, WebSocket analysis, protocol decoding, chess-engine integration, and testing are documented in the free book:
 
-**[Read the book](PLACEHOLDER_WEBSOCKET_BOOK_LINK)**
+**[Read the book](https://maksimkorzh.github.io/pcb/)**
 
 The book is a practical programming project covering reverse engineering, WebSockets, Python, networking, threading, protocol analysis, chess programming, UCI, bit manipulation, debugging, and software architecture.
 
